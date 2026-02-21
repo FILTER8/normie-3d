@@ -214,7 +214,7 @@ export default function Page() {
     const dataUrl = sceneRef.current?.exportPng();
     if (!dataUrl) return;
     const filename = `normie-3d-${id}.png`;
-    const stamp = `normie-3d #${id} - by 0xfilter8`;
+    const stamp = `normie-3d #${id}`;
     downloadWithStamp(dataUrl, filename, stamp);
   };
 
