@@ -79,6 +79,18 @@ function parseZParam(s: string | null): number[] {
   return out;
 }
 
+// ✅ NEW: extrude blocks (ints), min 1, no negatives
+function parseExParam(s: string | null): number[] {
+  const out = Array.from({ length: 8 }, () => 1);
+  if (!s) return out;
+  const parts = s.split(",").slice(0, 8);
+  for (let i = 0; i < parts.length; i++) {
+    const v = Math.round(parseFloat(parts[i]));
+    out[i] = Number.isFinite(v) ? clamp(v, 1, 12) : 1;
+  }
+  return out;
+}
+
 async function fetchPixelsUpstream(id: number): Promise<string> {
   const url = `${API_BASE}/normie/${id}/pixels`;
   const res = await fetch(url, { cache: "no-store" });
@@ -93,8 +105,18 @@ export async function GET(req: NextRequest) {
 
   const id = clampId(parseInt(url.searchParams.get("id") ?? "0", 10));
   const z = parseZParam(url.searchParams.get("z"));
-  const seed = clamp(parseInt(url.searchParams.get("seed") ?? "1", 10), 0, 1_000_000);
-  const noiseScale = clamp(parseInt(url.searchParams.get("noise") ?? "6", 10), 2, 16);
+  const extrude = parseExParam(url.searchParams.get("ex")); // ✅ NEW
+  const seed = clamp(
+    parseInt(url.searchParams.get("seed") ?? "1", 10),
+    0,
+    1_000_000
+  );
+  const noiseScale = clamp(
+    parseInt(url.searchParams.get("noise") ?? "6", 10),
+    2,
+    16
+  );
+
   const starfield = 0; // AR: always statue mode (starfield breaks Quick Look)
 
   const pixels = await fetchPixelsUpstream(id);
@@ -108,7 +130,8 @@ export async function GET(req: NextRequest) {
   const group = new THREE.Group();
   scene.add(group);
 
-  const W = 40, H = 40;
+  const W = 40,
+    H = 40;
   const pixelSize = 0.08;
   const depth = 0.12;
   const halfW = (W - 1) / 2;
@@ -119,11 +142,19 @@ export async function GET(req: NextRequest) {
   const shellBias = 0.35;
   const freq = 1 / Math.max(1.5, noiseScale);
 
-  const geometry = new THREE.BoxGeometry(pixelSize, pixelSize, pixelSize);
+  // ✅ Base material reused
   const material = new THREE.MeshStandardMaterial({
     color: new THREE.Color("#48494b"),
     roughness: 0.9,
     metalness: 0,
+  });
+
+  // ✅ NEW: build 8 geometries (one per group thickness)
+  // This is efficient and keeps AR stable.
+  const geomByGroup: THREE.BoxGeometry[] = Array.from({ length: 8 }, (_, g) => {
+    const blocks = clamp(extrude[g] ?? 1, 1, 16);
+    const thick = pixelSize * blocks; // "pixel blocks" feel
+    return new THREE.BoxGeometry(pixelSize, pixelSize, thick);
   });
 
   let onCount = 0;
@@ -140,18 +171,27 @@ export async function GET(req: NextRequest) {
     const bz = ((halfH - py) / halfH) * depth * 0.6;
 
     const jitter =
-      (xorshift32(((i + 1) * 10007) ^ (seed * 9176)) - 0.5) * pixelSize * 0.003;
+      (xorshift32(((i + 1) * 10007) ^ (seed * 9176)) - 0.5) *
+      pixelSize *
+      0.003;
 
     const n = noise2(px * freq, py * freq, seed + 1337); // [0,1)
     const g = Math.min(7, Math.floor(n * 8)); // 0..7
 
-    // fade Z offsets out as starfield increases
+    // fade Z offsets out as starfield increases (here starfield=0)
     const zBlend = 1 - starfield;
     const zOff = (z[g] ?? 0) * zBlend;
 
     const baseZ = bz + jitter + zOff;
 
-    // Universe target per cube
+    // ---- Extrude shift: make it feel like "adding blocks"
+    const blocks = clamp(extrude[g] ?? 1, 1, 12);
+    const thick = pixelSize * blocks;
+
+    // shift so extra thickness grows more in +Z (relief)
+    const baseZWithExtrude = baseZ + (thick - pixelSize) * 0.5;
+
+    // Universe target per cube (kept for parity; starfield=0 => stays statue)
     const dir = randomUnitVec(i, seed);
     const u = xorshift32(((i + 1) * 1618033) ^ (seed * 3343));
     const rVolume = Math.cbrt(u);
@@ -165,9 +205,9 @@ export async function GET(req: NextRequest) {
 
     const x = lerp(bx, tx, starfield);
     const y = lerp(by, ty, starfield);
-    const zPos = lerp(baseZ, tz, starfield);
+    const zPos = lerp(baseZWithExtrude, tz, starfield);
 
-    const mesh = new THREE.Mesh(geometry, material);
+    const mesh = new THREE.Mesh(geomByGroup[g], material);
     mesh.position.set(x, y, zPos);
     group.add(mesh);
   }
@@ -188,7 +228,6 @@ export async function GET(req: NextRequest) {
   const box2 = new THREE.Box3().setFromObject(group);
   group.position.y -= box2.min.y;
 
-  // You found SCALE=1 perfect — keep it
   const exporter = new USDZExporter();
   const arrayBuffer = await exporter.parseAsync(scene);
 

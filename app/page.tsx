@@ -1,10 +1,14 @@
+/* ===========================
+   app/page.tsx
+   v1.4 — Mobile export UX improved + AR params include extrude
+   =========================== */
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { fetchPixels, fetchTraits } from "./lib/normiesApi";
 import { NormieScene, type SceneHandle } from "./components/NormieScene";
 
-const APP_VERSION = "v1.3";
+const APP_VERSION = "v1.4";
 
 type Trait = { trait_type: string; value: string | number | boolean | null };
 type TraitsResponse = { attributes?: Trait[] };
@@ -55,9 +59,15 @@ function PixelSlider({
   );
 }
 
-function downloadWithStamp(dataUrl: string, filename: string, stamp: string) {
+async function downloadWithStamp(dataUrl: string, filename: string, stamp: string) {
+  await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+
   const img = new Image();
-  img.onload = () => {
+  img.decoding = "async";
+
+  img.onload = async () => {
+    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+
     const canvas = document.createElement("canvas");
     canvas.width = img.width;
     canvas.height = img.height;
@@ -88,11 +98,13 @@ function downloadWithStamp(dataUrl: string, filename: string, stamp: string) {
     ctx.fillText(stamp, x, y);
 
     const out = canvas.toDataURL("image/png");
+
     const a = document.createElement("a");
     a.href = out;
     a.download = filename;
     a.click();
   };
+
   img.src = dataUrl;
 }
 
@@ -137,11 +149,16 @@ function isTypingTarget(target: EventTarget | null): boolean {
   return tag === "input" || tag === "textarea" || target.isContentEditable;
 }
 
+function clamp(n: number, a: number, b: number) {
+  return Math.max(a, Math.min(b, n));
+}
+
 export default function Page() {
   const sceneRef = useRef<SceneHandle | null>(null);
   const sceneContainerRef = useRef<HTMLDivElement | null>(null);
 
   const [menuOpen, setMenuOpen] = useState(false);
+  const [isExporting, setIsExporting] = useState(false);
 
   const [idInput, setIdInput] = useState("0");
   const id = useMemo(() => clampId(parseInt(idInput, 10)), [idInput]);
@@ -153,21 +170,28 @@ export default function Page() {
   const Z_MIN = -2.5;
   const Z_MAX = 2.5;
 
+  // integer extrude blocks
+  const EX_MIN = 1;
+  const EX_MAX = 16;
+
   const [z, setZ] = useState<number[]>(
     () => Array.from({ length: 8 }, () => 0)
   );
+
+  const [extrude, setExtrude] = useState<number[]>(
+    () => Array.from({ length: 8 }, () => 1)
+  );
+
   const [starfield, setStarfield] = useState(0);
   const [noiseScale, setNoiseScale] = useState(6);
 
   const [seed, setSeed] = useState(1);
   const [autoRotate, setAutoRotate] = useState(true);
 
-  // ✅ Random ID on first load
   useEffect(() => {
     setIdInput(String(Math.floor(Math.random() * 10000)));
   }, []);
 
-  // ---- Data loading
   useEffect(() => {
     let cancelled = false;
     setStatus({ loading: true, error: "" });
@@ -200,38 +224,55 @@ export default function Page() {
     });
   };
 
+  const setExtrudeAt = (idx: number, value: number) => {
+    setExtrude((prev) => {
+      const next = prev.slice();
+      next[idx] = value;
+      return next;
+    });
+  };
+
   const setId = (next: number) => setIdInput(String(clampId(next)));
   const prevId = () => setId(id - 1);
   const nextId = () => setId(id + 1);
 
-  const randomizeZ = () => {
+  const randomizeAll = () => {
     const rZ = () => Math.random() * (Z_MAX - Z_MIN) + Z_MIN;
+    const rE = () => Math.floor(Math.random() * (EX_MAX - EX_MIN + 1)) + EX_MIN;
+
     setZ(Array.from({ length: 8 }, () => rZ()));
+    setExtrude(Array.from({ length: 8 }, () => rE()));
     setSeed((s) => s + 1);
   };
 
   const randomizeBlob = () => {
-    const v = Math.floor(Math.random() * (16 - 2 + 1)) + 2; // 2..16
+    const v = Math.floor(Math.random() * (16 - 2 + 1)) + 2;
     setNoiseScale(v);
     setSeed((s) => s + 1);
   };
 
   const reset = () => {
     setZ(Array.from({ length: 8 }, () => 0));
+    setExtrude(Array.from({ length: 8 }, () => 1));
     setStarfield(0);
   };
 
-  const exportPng = () => {
-    const dataUrl = sceneRef.current?.exportPng();
-    if (!dataUrl) return;
-    const filename = `normie-3d-${id}.png`;
-    const stamp = `normie-3d ${APP_VERSION} #${id} - by 0xfilter8`;
-    downloadWithStamp(dataUrl, filename, stamp);
+  const exportPng = async () => {
+    if (isExporting) return;
+    setIsExporting(true);
+
+    try {
+      const dataUrl = sceneRef.current?.exportPng();
+      if (!dataUrl) return;
+
+      const filename = `normie-3d-${id}.png`;
+      const stamp = `normie-3d ${APP_VERSION} #${id} - by 0xfilter8`;
+      await downloadWithStamp(dataUrl, filename, stamp);
+    } finally {
+      window.setTimeout(() => setIsExporting(false), 300);
+    }
   };
 
-  // ---- Keyboard shortcuts
-  // S save, R rotation toggle, F fullscreen, B random blob
-  // ArrowLeft/ArrowRight prev/next id
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       if (isTypingTarget(e.target)) return;
@@ -240,7 +281,7 @@ export default function Page() {
 
       if (k === "s") {
         e.preventDefault();
-        exportPng();
+        void exportPng();
         return;
       }
       if (k === "r") {
@@ -274,9 +315,8 @@ export default function Page() {
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [id]);
+  }, [id, isExporting]);
 
-  // ---- Swipe left/right + double tap randomize
   useEffect(() => {
     const el = sceneContainerRef.current;
     if (!el) return;
@@ -296,7 +336,7 @@ export default function Page() {
 
       const now = Date.now();
       if (now - lastTapT < 260) {
-        randomizeZ();
+        randomizeAll();
         lastTapT = 0;
       } else {
         lastTapT = now;
@@ -327,7 +367,6 @@ export default function Page() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
-  // ✅ Long press on scene = RESET (works for touch + mouse)
   useEffect(() => {
     const el = sceneContainerRef.current;
     if (!el) return;
@@ -343,7 +382,6 @@ export default function Page() {
     };
 
     const onPointerDown = (e: PointerEvent) => {
-      // left click or touch/pen
       if (e.pointerType === "mouse" && e.button !== 0) return;
 
       moved = false;
@@ -382,6 +420,13 @@ export default function Page() {
     };
   }, []);
 
+  const arHref = `/api/ar/usdz?id=${id}` +
+    `&z=${encodeURIComponent(z.join(","))}` +
+    `&ex=${encodeURIComponent(extrude.join(","))}` +
+    `&seed=${seed}` +
+    `&noise=${noiseScale}` +
+    `&star=0`;
+
   const Sidebar = (
     <div className="bg-[#e3e5e4] text-[#48494b] border-r border-black/10 p-4 h-full overflow-auto">
       <div className="flex items-start justify-between gap-2">
@@ -398,12 +443,12 @@ export default function Page() {
         </div>
 
         <button
-          onClick={randomizeZ}
+          onClick={randomizeAll}
           className="border border-black/20 px-3 py-2 text-[10px] hover:bg-black/5"
           style={{ touchAction: "manipulation" }}
           title="Double-tap on scene (mobile) randomizes"
         >
-          RANDOM Z
+          RANDOM
         </button>
       </div>
 
@@ -440,12 +485,13 @@ export default function Page() {
 
       <div className="mt-4 flex gap-2">
         <button
-          onClick={exportPng}
-          className="flex-1 border border-black/20 px-3 py-2 text-[10px] hover:bg-black/5"
+          onClick={() => void exportPng()}
+          disabled={isExporting}
+          className="flex-1 border border-black/20 px-3 py-2 text-[10px] hover:bg-black/5 disabled:opacity-60"
           style={{ touchAction: "manipulation" }}
           title="S"
         >
-          EXPORT PNG
+          {isExporting ? "SAVING…" : "EXPORT PNG"}
         </button>
         <button
           onClick={reset}
@@ -513,10 +559,26 @@ export default function Page() {
             key={i}
             label={`${i + 1}`}
             value={z[i]}
-            onChange={(v) => setZAt(i, v)}
+            onChange={(v) => setZAt(i, clamp(v, Z_MIN, Z_MAX))}
             min={Z_MIN}
             max={Z_MAX}
             step={0.01}
+          />
+        ))}
+      </div>
+
+      <div className="mt-6">
+        <div className="text-[10px] opacity-80">EXTRUDE (BLOCKS)</div>
+        {Array.from({ length: 8 }).map((_, i) => (
+          <PixelSlider
+            key={i}
+            label={`${i + 1}`}
+            value={extrude[i]}
+            onChange={(v) => setExtrudeAt(i, clamp(Math.round(v), EX_MIN, EX_MAX))}
+            min={EX_MIN}
+            max={EX_MAX}
+            step={1}
+            int
           />
         ))}
       </div>
@@ -553,23 +615,28 @@ export default function Page() {
   return (
     <div className="h-screen bg-[#e3e5e4]" style={{ touchAction: "manipulation" }}>
       {/* Top bar (mobile only) */}
-      <div className="md:hidden flex items-center justify-between border-b border-black/10 px-3 py-2">
-        <div className="text-[10px] text-[#48494b]">
+      <div className="md:hidden flex items-center justify-between border-b border-black/10 px-3 py-2 gap-2">
+        <div className="text-[10px] text-[#48494b] whitespace-nowrap">
           NORMIES 3D {APP_VERSION}
         </div>
-<a
-  href={`/api/ar/usdz?id=${id}&z=${encodeURIComponent(z.join(","))}&seed=${seed}&noise=${noiseScale}&star=0`}
-  className="border border-black/20 px-3 py-2 text-[10px] hover:bg-black/5 inline-block"
->
-  AR (iPhone)
-</a>
-        <button
-          className="border border-black/20 px-3 py-2 text-[10px] text-[#48494b] hover:bg-black/5"
-          style={{ touchAction: "manipulation" }}
-          onClick={() => setMenuOpen(true)}
-        >
-          MENU
-        </button>
+
+        <div className="ml-auto flex items-center gap-2">
+          <a
+            href={arHref}
+            className="border border-black/20 px-3 py-2 text-[10px] hover:bg-black/5 inline-block whitespace-nowrap"
+            style={{ touchAction: "manipulation" }}
+          >
+            AR
+          </a>
+
+          <button
+            className="border border-black/20 px-3 py-2 text-[10px] text-[#48494b] hover:bg-black/5 whitespace-nowrap"
+            style={{ touchAction: "manipulation" }}
+            onClick={() => setMenuOpen(true)}
+          >
+            MENU
+          </button>
+        </div>
       </div>
 
       {/* Desktop */}
@@ -580,6 +647,7 @@ export default function Page() {
             ref={sceneRef}
             pixels={pixels}
             z={z}
+            extrude={extrude}
             starfield={starfield}
             seed={seed}
             autoRotate={autoRotate}
@@ -618,15 +686,16 @@ export default function Page() {
 
         <div className="absolute right-3 top-3 flex items-center gap-2">
           <button
-            onClick={exportPng}
-            className="border border-black/20 bg-[#e3e5e4]/80 px-3 py-2 text-[10px] text-[#48494b]"
+            onClick={() => void exportPng()}
+            disabled={isExporting}
+            className="border border-black/20 bg-[#e3e5e4]/80 px-3 py-2 text-[10px] text-[#48494b] disabled:opacity-60"
             style={{ touchAction: "manipulation" }}
             title="S"
           >
-            SAVE
+            {isExporting ? "SAVING…" : "SAVE"}
           </button>
           <button
-            onClick={randomizeZ}
+            onClick={randomizeAll}
             className="border border-black/20 bg-[#e3e5e4]/80 px-3 py-2 text-[10px] text-[#48494b]"
             style={{ touchAction: "manipulation" }}
             title="Double tap"
@@ -639,6 +708,7 @@ export default function Page() {
           ref={sceneRef}
           pixels={pixels}
           z={z}
+          extrude={extrude}
           starfield={starfield}
           seed={seed}
           autoRotate={autoRotate}

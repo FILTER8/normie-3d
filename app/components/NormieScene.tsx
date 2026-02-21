@@ -26,6 +26,7 @@ export const NormieScene = forwardRef<
   {
     pixels: string | null;
     z: number[];
+    extrude: number[]; // ✅ NEW
     starfield: number;
     seed: number;
     autoRotate: boolean;
@@ -33,7 +34,7 @@ export const NormieScene = forwardRef<
     containerRef?: RefObject<HTMLDivElement | null>;
   }
 >(function NormieScene(
-  { pixels, z, starfield, seed, autoRotate, noiseScale, containerRef },
+  { pixels, z, extrude, starfield, seed, autoRotate, noiseScale, containerRef },
   ref
 ) {
   const exporterRef = useRef<(() => string) | null>(null);
@@ -60,6 +61,7 @@ export const NormieScene = forwardRef<
           <NormieVoxels
             pixels={pixels}
             z={z}
+            extrude={extrude}  // ✅ NEW
             starfield={starfield}
             seed={seed}
             noiseScale={noiseScale}

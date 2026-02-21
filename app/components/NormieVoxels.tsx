@@ -1,6 +1,7 @@
 /* ===========================
    app/components/NormieVoxels.tsx
    8 contiguous NOISE groups (smooth field) + universe sphere starfield
+   + per-group extrude in INTEGER voxel blocks
    =========================== */
 import { useMemo } from "react";
 
@@ -31,9 +32,7 @@ function smoothstep(t: number) {
   return t * t * (3 - 2 * t);
 }
 
-// value noise on a 2D grid + bilinear interpolation
 function hash2(ix: number, iy: number, seed: number) {
-  // stable hash -> [0,1)
   const n = (ix * 374761393) ^ (iy * 668265263) ^ (seed * 1442695041);
   return xorshift32(n | 0);
 }
@@ -57,23 +56,33 @@ function noise2(x: number, y: number, seed: number) {
   return lerp(ix0, ix1, sy); // [0,1)
 }
 
+function clamp(n: number, a: number, b: number) {
+  return Math.max(a, Math.min(b, n));
+}
+
+const DEFAULT_EXTRUDE = Array.from({ length: 8 }, () => 1);
+
 export function NormieVoxels({
   pixels,
   pixelSize = 0.08,
   depth = 0.12,
   z, // 8 sliders
+  extrude, // 8 sliders (integer blocks, >=1)
   starfield, // 0..1
   seed,
-  noiseScale, // NEW: controls group blob size
+  noiseScale, // controls group blob size
 }: {
   pixels: string;
   pixelSize?: number;
   depth?: number;
   z: number[]; // length 8
+  extrude?: number[]; // length 8, ints (>=1)
   starfield: number;
   seed: number;
-  noiseScale: number; // e.g. 2..16
+  noiseScale: number; // 2..16
 }) {
+  const exArr = extrude ?? DEFAULT_EXTRUDE;
+
   const cubes = useMemo(() => {
     const out: {
       bx: number;
@@ -84,6 +93,7 @@ export function NormieVoxels({
       tz: number;
       group: number; // 0..7
       jitter: number;
+      idx: number;
     }[] = [];
 
     const W = 40,
@@ -91,11 +101,9 @@ export function NormieVoxels({
     const halfW = (W - 1) / 2;
     const halfH = (H - 1) / 2;
 
-    // Universe radius + shell feel
     const R = 12;
     const shellBias = 0.35;
 
-    // map "noiseScale" -> frequency: higher scale => bigger blobs (lower frequency)
     const freq = 1 / Math.max(1.5, noiseScale);
 
     for (let i = 0; i < pixels.length; i++) {
@@ -108,16 +116,14 @@ export function NormieVoxels({
       const by = (halfH - py) * pixelSize;
       const bz = ((halfH - py) / halfH) * depth * 0.6;
 
-      // tiny jitter to reduce z-fighting lines
       const jitter =
-        (xorshift32(((i + 1) * 10007) ^ (seed * 9176)) - 0.5) * pixelSize * 0.003;
+        (xorshift32(((i + 1) * 10007) ^ (seed * 9176)) - 0.5) *
+        pixelSize *
+        0.003;
 
-      // ✅ contiguous group assignment via smooth noise field
-      // use px/py space (not index) -> blobs/regions
-      const n = noise2(px * freq, py * freq, seed + 1337); // [0,1)
-      const group = Math.min(7, Math.floor(n * 8)); // 0..7
+      const n = noise2(px * freq, py * freq, seed + 1337);
+      const group = Math.min(7, Math.floor(n * 8));
 
-      // Universe target per cube
       const dir = randomUnitVec(i, seed);
       const u = xorshift32(((i + 1) * 1618033) ^ (seed * 3343));
       const rVolume = Math.cbrt(u);
@@ -134,6 +140,7 @@ export function NormieVoxels({
         ty: dir.y * radius,
         tz: dir.z * radius,
         group,
+        idx: i,
       });
     }
 
@@ -144,21 +151,30 @@ export function NormieVoxels({
 
   return (
     <group position={[0, 0.05, 0]}>
-      {cubes.map((c, idx) => {
+      {cubes.map((c, i) => {
         const zOff = z[c.group] ?? 0;
+
+        // integer "block count" extrude, minimum 1
+        const rawBlocks = Math.round(exArr[c.group] ?? 1);
+        const blocks = clamp(rawBlocks, 1, 12); // cap safety
+        // blend back to 1 as starfield increases
+        const blocksBlend = lerp(blocks, 1, starfield);
+
+        const thick = pixelSize * blocksBlend;
 
         // fade Z offsets out as starfield increases
         const zBlend = 1 - starfield;
-
         const baseZ = c.bz + c.jitter + zOff * zBlend;
 
         const x = lerp(c.bx, c.tx, starfield);
         const y = lerp(c.by, c.ty, starfield);
-        const zPos = lerp(baseZ, c.tz, starfield);
+
+        // shift so extra thickness grows outward a bit (relief feel)
+        const zPos = lerp(baseZ + (thick - pixelSize) * 0.5, c.tz, starfield);
 
         return (
-          <mesh key={idx} position={[x, y, zPos]}>
-            <boxGeometry args={[pixelSize, pixelSize, pixelSize]} />
+          <mesh key={i} position={[x, y, zPos]}>
+            <boxGeometry args={[pixelSize, pixelSize, thick]} />
             <meshStandardMaterial
               color={normieColor}
               roughness={0.9}
