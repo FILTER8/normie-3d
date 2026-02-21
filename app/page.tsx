@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { fetchPixels, fetchTraits } from "./lib/normiesApi";
 import { NormieScene, type SceneHandle } from "./components/NormieScene";
 
-const APP_VERSION = "v1.1";
+const APP_VERSION = "v1.3";
 
 type Trait = { trait_type: string; value: string | number | boolean | null };
 type TraitsResponse = { attributes?: Trait[] };
@@ -558,7 +558,7 @@ export default function Page() {
           NORMIES 3D {APP_VERSION}
         </div>
 <a
-  href={`/api/ar/usdz?id=${id}&z=${encodeURIComponent(z.join(","))}&seed=${seed}&noise=${noiseScale}&star=${starfield}`}
+  href={`/api/ar/usdz?id=${id}&z=${encodeURIComponent(z.join(","))}&seed=${seed}&noise=${noiseScale}&star=0`}
   className="border border-black/20 px-3 py-2 text-[10px] hover:bg-black/5 inline-block"
 >
   AR (iPhone)
