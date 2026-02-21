@@ -1,11 +1,23 @@
 /* ===========================
    app/page.tsx
+   FULL (mobile drawer + swipe + dbltap + keys + version v1.1)
+   Keys:
+   - S save
+   - R rotation toggle
+   - F fullscreen
+   - B random blob size
+   - ArrowLeft/ArrowRight prev/next
+   Mobile:
+   - swipe left/right prev/next
+   - double tap randomize Z
    =========================== */
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { fetchPixels, fetchTraits } from "./lib/normiesApi";
 import { NormieScene, type SceneHandle } from "./components/NormieScene";
+
+const APP_VERSION = "v1.1";
 
 type Trait = { trait_type: string; value: string | number | boolean | null };
 type TraitsResponse = { attributes?: Trait[] };
@@ -142,6 +154,8 @@ export default function Page() {
   const sceneRef = useRef<SceneHandle | null>(null);
   const sceneContainerRef = useRef<HTMLDivElement | null>(null);
 
+  const [menuOpen, setMenuOpen] = useState(false);
+
   const [idInput, setIdInput] = useState("0");
   const id = useMemo(() => clampId(parseInt(idInput, 10)), [idInput]);
 
@@ -161,6 +175,7 @@ export default function Page() {
   const [seed, setSeed] = useState(1);
   const [autoRotate, setAutoRotate] = useState(true);
 
+  // ---- Data loading
   useEffect(() => {
     let cancelled = false;
     setStatus({ loading: true, error: "" });
@@ -177,7 +192,7 @@ export default function Page() {
         const msg = e instanceof Error ? e.message : "Unknown error";
         setStatus({ loading: false, error: msg });
       }
-    }, 250);
+    }, 150);
 
     return () => {
       cancelled = true;
@@ -192,6 +207,10 @@ export default function Page() {
       return next;
     });
   };
+
+  const setId = (next: number) => setIdInput(String(clampId(next)));
+  const prevId = () => setId(id - 1);
+  const nextId = () => setId(id + 1);
 
   const randomizeZ = () => {
     const rZ = () => Math.random() * (Z_MAX - Z_MIN) + Z_MIN;
@@ -214,12 +233,13 @@ export default function Page() {
     const dataUrl = sceneRef.current?.exportPng();
     if (!dataUrl) return;
     const filename = `normie-3d-${id}.png`;
-    const stamp = `normie-3d #${id}`;
+    const stamp = `normie-3d ${APP_VERSION} #${id} - by 0xfilter8`;
     downloadWithStamp(dataUrl, filename, stamp);
   };
 
-  // Keyboard shortcuts:
-  // S = save, R = rotation toggle, F = fullscreen, B = random blob
+  // ---- Keyboard shortcuts
+  // S save, R rotation toggle, F fullscreen, B random blob
+  // ArrowLeft/ArrowRight prev/next id
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       if (isTypingTarget(e.target)) return;
@@ -231,23 +251,31 @@ export default function Page() {
         exportPng();
         return;
       }
-
       if (k === "r") {
         e.preventDefault();
         setAutoRotate((v) => !v);
         return;
       }
-
       if (k === "f") {
         e.preventDefault();
         const el = sceneContainerRef.current;
         if (el) void toggleFullscreen(el);
         return;
       }
-
       if (k === "b") {
         e.preventDefault();
         randomizeBlob();
+        return;
+      }
+
+      if (e.key === "ArrowLeft") {
+        e.preventDefault();
+        prevId();
+        return;
+      }
+      if (e.key === "ArrowRight") {
+        e.preventDefault();
+        nextId();
       }
     };
 
@@ -256,192 +284,294 @@ export default function Page() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
-  return (
-    <div className="grid h-screen grid-cols-[380px_1fr]">
-      <aside className="bg-[#e3e5e4] text-[#48494b] border-r border-black/10 p-4">
-        <div className="flex items-start justify-between gap-2">
-          <div>
-            <h2 className="text-sm leading-tight">NORMIES 3D</h2>
-            <a
-              href="https://x.com/0xfilter8"
-              target="_blank"
-              rel="noreferrer"
-              className="mt-2 inline-block text-[10px] underline opacity-80 hover:opacity-100"
-            >
-              by 0xfilter
-            </a>
-          </div>
+  // ---- Swipe left/right on scene to prev/next + double tap = randomizeZ
+  useEffect(() => {
+    const el = sceneContainerRef.current;
+    if (!el) return;
 
-          <button
-            onClick={randomizeZ}
-            className="border border-black/20 px-3 py-2 text-[10px] hover:bg-black/5"
-            title="(Z randomize)"
+    let startX = 0;
+    let startY = 0;
+    let startT = 0;
+
+    let lastTapT = 0;
+
+    const onTouchStart = (ev: TouchEvent) => {
+      if (ev.touches.length !== 1) return;
+      const t = ev.touches[0];
+      startX = t.clientX;
+      startY = t.clientY;
+      startT = Date.now();
+
+      const now = Date.now();
+      if (now - lastTapT < 260) {
+        randomizeZ();
+        lastTapT = 0;
+      } else {
+        lastTapT = now;
+      }
+    };
+
+    const onTouchEnd = (ev: TouchEvent) => {
+      const t = ev.changedTouches[0];
+      if (!t) return;
+
+      const dx = t.clientX - startX;
+      const dy = t.clientY - startY;
+      const dt = Date.now() - startT;
+
+      if (dt < 420 && Math.abs(dx) > 55 && Math.abs(dx) > Math.abs(dy) * 1.2) {
+        if (dx < 0) nextId();
+        else prevId();
+      }
+    };
+
+    el.addEventListener("touchstart", onTouchStart, { passive: true });
+    el.addEventListener("touchend", onTouchEnd, { passive: true });
+
+    return () => {
+      el.removeEventListener("touchstart", onTouchStart);
+      el.removeEventListener("touchend", onTouchEnd);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id]);
+
+  const Sidebar = (
+    <div className="bg-[#e3e5e4] text-[#48494b] border-r border-black/10 p-4 h-full overflow-auto">
+      <div className="flex items-start justify-between gap-2">
+        <div>
+          <h2 className="text-sm leading-tight">
+            NORMIES 3D {APP_VERSION}
+          </h2>
+          <a
+            href="https://x.com/0xfilter8"
+            target="_blank"
+            rel="noreferrer"
+            className="mt-2 inline-block text-[10px] underline opacity-80 hover:opacity-100"
           >
-            RANDOM Z
-          </button>
+            by 0xfilter
+          </a>
         </div>
 
-        <label className="mt-4 block text-[10px] opacity-80">TOKEN ID (0–9999)</label>
+        <button
+          onClick={randomizeZ}
+          className="border border-black/20 px-3 py-2 text-[10px] hover:bg-black/5"
+          title="Double-tap on scene (mobile) randomizes"
+        >
+          RANDOM Z
+        </button>
+      </div>
+
+      <label className="mt-4 block text-[10px] opacity-80">TOKEN ID (0–9999)</label>
+      <div className="mt-2 flex gap-2">
         <input
           value={idInput}
           onChange={(e) => setIdInput(e.target.value)}
           inputMode="numeric"
-          className="mt-2 w-full border border-black/20 bg-white/60 px-3 py-2 text-[12px]"
+          className="w-full border border-black/20 bg-white/60 px-3 py-2 text-[12px]"
         />
+        <button
+          onClick={prevId}
+          className="border border-black/20 px-3 py-2 text-[10px] hover:bg-black/5"
+          title="Prev"
+        >
+          ◀
+        </button>
+        <button
+          onClick={nextId}
+          className="border border-black/20 px-3 py-2 text-[10px] hover:bg-black/5"
+          title="Next"
+        >
+          ▶
+        </button>
+      </div>
 
-        <div className="mt-3 text-[10px]">
-          {status.loading && <div>LOADING…</div>}
-          {status.error && <div className="text-red-700">{status.error}</div>}
-        </div>
+      <div className="mt-3 text-[10px]">
+        {status.loading && <div>LOADING…</div>}
+        {status.error && <div className="text-red-700">{status.error}</div>}
+      </div>
 
-        <div className="mt-4 flex gap-2">
-          <button
-            onClick={exportPng}
-            className="flex-1 border border-black/20 px-3 py-2 text-[10px] hover:bg-black/5"
-            title="S"
-          >
-            EXPORT PNG
-          </button>
-          <button
-            onClick={reset}
-            className="border border-black/20 px-3 py-2 text-[10px] hover:bg-black/5"
-          >
-            RESET
-          </button>
-        </div>
+      <div className="mt-4 flex gap-2">
+        <button
+          onClick={exportPng}
+          className="flex-1 border border-black/20 px-3 py-2 text-[10px] hover:bg-black/5"
+          title="S"
+        >
+          EXPORT PNG
+        </button>
+        <button
+          onClick={reset}
+          className="border border-black/20 px-3 py-2 text-[10px] hover:bg-black/5"
+        >
+          RESET
+        </button>
+      </div>
 
-        <div className="mt-4 flex gap-2">
-          <button
-            onClick={() => setAutoRotate((v) => !v)}
-            className="flex-1 border border-black/20 px-3 py-2 text-[10px] hover:bg-black/5"
-            title="R"
-          >
-            ROTATION: {autoRotate ? "ON" : "OFF"}
-          </button>
-          <button
-            onClick={() => {
-              const el = sceneContainerRef.current;
-              if (el) void toggleFullscreen(el);
-            }}
-            className="border border-black/20 px-3 py-2 text-[10px] hover:bg-black/5"
-            title="F"
-          >
-            FULLSCREEN
-          </button>
-        </div>
+      <div className="mt-4 flex gap-2">
+        <button
+          onClick={() => setAutoRotate((v) => !v)}
+          className="flex-1 border border-black/20 px-3 py-2 text-[10px] hover:bg-black/5"
+          title="R"
+        >
+          ROTATION: {autoRotate ? "ON" : "OFF"}
+        </button>
+        <button
+          onClick={() => {
+            const el = sceneContainerRef.current;
+            if (el) void toggleFullscreen(el);
+          }}
+          className="border border-black/20 px-3 py-2 text-[10px] hover:bg-black/5"
+          title="F"
+        >
+          FULL
+        </button>
+      </div>
 
-        <div className="mt-6">
-          <div className="text-[10px] opacity-80">GROUP STYLE</div>
+      <div className="mt-6">
+        <div className="text-[10px] opacity-80">GROUP STYLE</div>
+        <PixelSlider
+          label="BLOB SIZE"
+          value={noiseScale}
+          onChange={(v) => setNoiseScale(Math.max(2, Math.min(16, Math.round(v))))}
+          min={2}
+          max={16}
+          step={1}
+          int
+        />
+        <button
+          onClick={randomizeBlob}
+          className="mt-3 w-full border border-black/20 px-3 py-2 text-[10px] hover:bg-black/5"
+          title="B"
+        >
+          RANDOM BLOB
+        </button>
+        <button
+          onClick={() => setSeed((s) => s + 1)}
+          className="mt-3 w-full border border-black/20 px-3 py-2 text-[10px] hover:bg-black/5"
+        >
+          REROLL GROUPS
+        </button>
+      </div>
+
+      <div className="mt-6">
+        <div className="text-[10px] opacity-80">DEPTH (8 GROUPS)</div>
+        {Array.from({ length: 8 }).map((_, i) => (
           <PixelSlider
-            label="BLOB SIZE"
-            value={noiseScale}
-            onChange={(v) => setNoiseScale(Math.max(2, Math.min(16, Math.round(v))))}
-            min={2}
-            max={16}
-            step={1}
-            int
-          />
-          <button
-            onClick={randomizeBlob}
-            className="mt-3 w-full border border-black/20 px-3 py-2 text-[10px] hover:bg-black/5"
-            title="B"
-          >
-            RANDOM BLOB
-          </button>
-          <button
-            onClick={() => setSeed((s) => s + 1)}
-            className="mt-3 w-full border border-black/20 px-3 py-2 text-[10px] hover:bg-black/5"
-          >
-            REROLL GROUPS
-          </button>
-        </div>
-
-        <div className="mt-6">
-          <div className="text-[10px] opacity-80">DEPTH (8 GROUPS)</div>
-          {Array.from({ length: 8 }).map((_, i) => (
-            <PixelSlider
-              key={i}
-              label={`${i + 1}`}
-              value={z[i]}
-              onChange={(v) => setZAt(i, v)}
-              min={Z_MIN}
-              max={Z_MAX}
-              step={0.01}
-            />
-          ))}
-        </div>
-
-        <div className="mt-6">
-          <div className="text-[10px] opacity-80">UNIVERSE</div>
-          <PixelSlider
-            label="STARFIELD"
-            value={starfield}
-            onChange={setStarfield}
-            min={0}
-            max={1}
+            key={i}
+            label={`${i + 1}`}
+            value={z[i]}
+            onChange={(v) => setZAt(i, v)}
+            min={Z_MIN}
+            max={Z_MAX}
             step={0.01}
           />
+        ))}
+      </div>
+
+      <div className="mt-6">
+        <div className="text-[10px] opacity-80">UNIVERSE</div>
+        <PixelSlider
+          label="STARFIELD"
+          value={starfield}
+          onChange={setStarfield}
+          min={0}
+          max={1}
+          step={0.01}
+        />
+      </div>
+
+      <div className="mt-8">
+        <div className="text-[10px] opacity-80">TRAITS</div>
+        {!traits?.attributes?.length ? (
+          <div className="mt-2 text-[10px] opacity-60">—</div>
+        ) : (
+          <ul className="mt-2 space-y-1 text-[10px]">
+            {traits.attributes.map((a: Trait, i: number) => (
+              <li key={i}>
+                <span className="opacity-70">{a.trait_type}:</span> {String(a.value)}
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    </div>
+  );
+
+  return (
+    <div className="h-screen bg-[#e3e5e4]">
+      {/* Top bar (mobile only) */}
+      <div className="md:hidden flex items-center justify-between border-b border-black/10 px-3 py-2">
+        <div className="text-[10px] text-[#48494b]">
+          NORMIES 3D {APP_VERSION}
+        </div>
+        <button
+          className="border border-black/20 px-3 py-2 text-[10px] text-[#48494b] hover:bg-black/5"
+          onClick={() => setMenuOpen(true)}
+        >
+          MENU
+        </button>
+      </div>
+
+      {/* Desktop layout */}
+      <div className="hidden md:grid h-[calc(100vh)] grid-cols-[380px_1fr]">
+        <aside>{Sidebar}</aside>
+        <main className="relative bg-[#e3e5e4]" ref={sceneContainerRef}>
+          <NormieScene
+            ref={sceneRef}
+            pixels={pixels}
+            z={z}
+            starfield={starfield}
+            seed={seed}
+            autoRotate={autoRotate}
+            noiseScale={noiseScale}
+            containerRef={sceneContainerRef}
+          />
+        </main>
+      </div>
+
+      {/* Mobile scene */}
+      <div
+        className="md:hidden relative h-[calc(100vh-41px)] bg-[#e3e5e4]"
+        ref={sceneContainerRef}
+      >
+        {/* ID + arrows */}
+        <div className="absolute left-3 top-3 flex items-center gap-2">
+          <button
+            onClick={prevId}
+            className="border border-black/20 bg-[#e3e5e4]/80 px-3 py-2 text-[10px] text-[#48494b]"
+            aria-label="Previous"
+          >
+            ◀
+          </button>
+          <div className="border border-black/20 bg-[#e3e5e4]/80 px-3 py-2 text-[10px] text-[#48494b]">
+            #{id}
+          </div>
+          <button
+            onClick={nextId}
+            className="border border-black/20 bg-[#e3e5e4]/80 px-3 py-2 text-[10px] text-[#48494b]"
+            aria-label="Next"
+          >
+            ▶
+          </button>
         </div>
 
-        <div className="mt-8">
-          <div className="text-[10px] opacity-80">TRAITS</div>
-          {!traits?.attributes?.length ? (
-            <div className="mt-2 text-[10px] opacity-60">—</div>
-          ) : (
-            <ul className="mt-2 space-y-1 text-[10px]">
-              {traits.attributes.map((a: Trait, i: number) => (
-                <li key={i}>
-                  <span className="opacity-70">{a.trait_type}:</span>{" "}
-                  {String(a.value)}
-                </li>
-              ))}
-            </ul>
-          )}
+        {/* Quick actions */}
+        <div className="absolute right-3 top-3 flex items-center gap-2">
+          <button
+            onClick={exportPng}
+            className="border border-black/20 bg-[#e3e5e4]/80 px-3 py-2 text-[10px] text-[#48494b]"
+            title="S"
+          >
+            SAVE
+          </button>
+          <button
+            onClick={randomizeZ}
+            className="border border-black/20 bg-[#e3e5e4]/80 px-3 py-2 text-[10px] text-[#48494b]"
+            title="Double tap"
+          >
+            RAND
+          </button>
         </div>
 
-        <style jsx global>{`
-          .pixel-range {
-            -webkit-appearance: none;
-            appearance: none;
-            height: 10px;
-            background: rgba(72, 73, 75, 0.18);
-            border: 1px solid rgba(0, 0, 0, 0.25);
-          }
-          .pixel-range:focus {
-            outline: none;
-          }
-          .pixel-range::-webkit-slider-thumb {
-            -webkit-appearance: none;
-            appearance: none;
-            width: 14px;
-            height: 14px;
-            background: #48494b;
-            border: 1px solid rgba(0, 0, 0, 0.35);
-            border-radius: 0;
-            cursor: pointer;
-          }
-          .pixel-range::-webkit-slider-runnable-track {
-            height: 10px;
-            border-radius: 0;
-          }
-          .pixel-range::-moz-range-thumb {
-            width: 14px;
-            height: 14px;
-            background: #48494b;
-            border: 1px solid rgba(0, 0, 0, 0.35);
-            border-radius: 0;
-            cursor: pointer;
-          }
-          .pixel-range::-moz-range-track {
-            height: 10px;
-            background: rgba(72, 73, 75, 0.18);
-            border: 1px solid rgba(0, 0, 0, 0.25);
-            border-radius: 0;
-          }
-        `}</style>
-      </aside>
-
-      <main className="bg-[#e3e5e4]" ref={sceneContainerRef}>
         <NormieScene
           ref={sceneRef}
           pixels={pixels}
@@ -452,7 +582,71 @@ export default function Page() {
           noiseScale={noiseScale}
           containerRef={sceneContainerRef}
         />
-      </main>
+      </div>
+
+      {/* Mobile drawer */}
+      {menuOpen ? (
+        <div className="md:hidden fixed inset-0 z-50">
+          <div
+            className="absolute inset-0 bg-black/30"
+            onClick={() => setMenuOpen(false)}
+          />
+          <div className="absolute left-0 top-0 h-full w-[320px] border-r border-black/10 bg-[#e3e5e4]">
+            <div className="flex items-center justify-between border-b border-black/10 px-3 py-2">
+              <div className="text-[10px] text-[#48494b]">MENU</div>
+              <button
+                className="border border-black/20 px-3 py-2 text-[10px] text-[#48494b] hover:bg-black/5"
+                onClick={() => setMenuOpen(false)}
+              >
+                CLOSE
+              </button>
+            </div>
+            {Sidebar}
+          </div>
+        </div>
+      ) : null}
+
+      {/* Pixel slider CSS */}
+      <style jsx global>{`
+        .pixel-range {
+          -webkit-appearance: none;
+          appearance: none;
+          height: 10px;
+          background: rgba(72, 73, 75, 0.18);
+          border: 1px solid rgba(0, 0, 0, 0.25);
+        }
+        .pixel-range:focus {
+          outline: none;
+        }
+        .pixel-range::-webkit-slider-thumb {
+          -webkit-appearance: none;
+          appearance: none;
+          width: 14px;
+          height: 14px;
+          background: #48494b;
+          border: 1px solid rgba(0, 0, 0, 0.35);
+          border-radius: 0;
+          cursor: pointer;
+        }
+        .pixel-range::-webkit-slider-runnable-track {
+          height: 10px;
+          border-radius: 0;
+        }
+        .pixel-range::-moz-range-thumb {
+          width: 14px;
+          height: 14px;
+          background: #48494b;
+          border: 1px solid rgba(0, 0, 0, 0.35);
+          border-radius: 0;
+          cursor: pointer;
+        }
+        .pixel-range::-moz-range-track {
+          height: 10px;
+          background: rgba(72, 73, 75, 0.18);
+          border: 1px solid rgba(0, 0, 0, 0.25);
+          border-radius: 0;
+        }
+      `}</style>
     </div>
   );
 }
