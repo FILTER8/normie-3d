@@ -13,9 +13,10 @@ This project uses the public Normies endpoints + metadata.
 - Normies main site: https://www.normies.art/
 - Normies X: https://x.com/normiesART
 - Normies API: https://api.normies.art/
+- Art by SercOne: https://x.com/serc1n
 - API / code credit: https://x.com/YigitDuman
 
-Huge respect to the Normies team + Yigit for making the data accessible.
+Huge respect to the Normies team, SercOne + Yigit for making the data accessible.
 
 ## Features
 
@@ -25,6 +26,7 @@ Huge respect to the Normies team + Yigit for making the data accessible.
 - Pixel-styled UI + Press Start 2P font
 - Export PNG with a small stamp
 - Fullscreen + keyboard shortcuts
+- iPhone AR export (USDZ / Quick Look)
 
 ## Keyboard Shortcuts
 
@@ -32,6 +34,13 @@ Huge respect to the Normies team + Yigit for making the data accessible.
 - **R** → Toggle rotation (on/off)
 - **F** → Fullscreen
 - **B** → Randomize blob size (group region size)
+- **← / →** → Previous / next token
+
+## Mobile Gestures
+
+- **Swipe left / right** → Previous / next token
+- **Double tap** → Randomize sliders
+- **Long press** → Reset
 
 ## Free to Use / Clone
 

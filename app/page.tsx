@@ -557,6 +557,12 @@ export default function Page() {
         <div className="text-[10px] text-[#48494b]">
           NORMIES 3D {APP_VERSION}
         </div>
+<a
+  href={`/api/ar/usdz?id=${id}&z=${encodeURIComponent(z.join(","))}&seed=${seed}&noise=${noiseScale}&star=${starfield}`}
+  className="border border-black/20 px-3 py-2 text-[10px] hover:bg-black/5 inline-block"
+>
+  AR (iPhone)
+</a>
         <button
           className="border border-black/20 px-3 py-2 text-[10px] text-[#48494b] hover:bg-black/5"
           style={{ touchAction: "manipulation" }}
