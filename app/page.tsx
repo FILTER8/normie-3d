@@ -1,16 +1,3 @@
-/* ===========================
-   app/page.tsx
-   FULL (mobile drawer + swipe + dbltap + keys + version v1.1)
-   Keys:
-   - S save
-   - R rotation toggle
-   - F fullscreen
-   - B random blob size
-   - ArrowLeft/ArrowRight prev/next
-   Mobile:
-   - swipe left/right prev/next
-   - double tap randomize Z
-   =========================== */
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -175,6 +162,11 @@ export default function Page() {
   const [seed, setSeed] = useState(1);
   const [autoRotate, setAutoRotate] = useState(true);
 
+  // ✅ Random ID on first load
+  useEffect(() => {
+    setIdInput(String(Math.floor(Math.random() * 10000)));
+  }, []);
+
   // ---- Data loading
   useEffect(() => {
     let cancelled = false;
@@ -284,7 +276,7 @@ export default function Page() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
-  // ---- Swipe left/right on scene to prev/next + double tap = randomizeZ
+  // ---- Swipe left/right + double tap randomize
   useEffect(() => {
     const el = sceneContainerRef.current;
     if (!el) return;
@@ -335,13 +327,66 @@ export default function Page() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
+  // ✅ Long press on scene = RESET (works for touch + mouse)
+  useEffect(() => {
+    const el = sceneContainerRef.current;
+    if (!el) return;
+
+    let timer: number | null = null;
+    let downX = 0;
+    let downY = 0;
+    let moved = false;
+
+    const clear = () => {
+      if (timer !== null) window.clearTimeout(timer);
+      timer = null;
+    };
+
+    const onPointerDown = (e: PointerEvent) => {
+      // left click or touch/pen
+      if (e.pointerType === "mouse" && e.button !== 0) return;
+
+      moved = false;
+      downX = e.clientX;
+      downY = e.clientY;
+
+      clear();
+      timer = window.setTimeout(() => {
+        if (!moved) reset();
+      }, 650);
+    };
+
+    const onPointerMove = (e: PointerEvent) => {
+      const dx = e.clientX - downX;
+      const dy = e.clientY - downY;
+      if (Math.abs(dx) > 10 || Math.abs(dy) > 10) {
+        moved = true;
+        clear();
+      }
+    };
+
+    const onPointerUp = () => clear();
+    const onPointerCancel = () => clear();
+
+    el.addEventListener("pointerdown", onPointerDown);
+    el.addEventListener("pointermove", onPointerMove);
+    el.addEventListener("pointerup", onPointerUp);
+    el.addEventListener("pointercancel", onPointerCancel);
+
+    return () => {
+      el.removeEventListener("pointerdown", onPointerDown);
+      el.removeEventListener("pointermove", onPointerMove);
+      el.removeEventListener("pointerup", onPointerUp);
+      el.removeEventListener("pointercancel", onPointerCancel);
+      clear();
+    };
+  }, []);
+
   const Sidebar = (
     <div className="bg-[#e3e5e4] text-[#48494b] border-r border-black/10 p-4 h-full overflow-auto">
       <div className="flex items-start justify-between gap-2">
         <div>
-          <h2 className="text-sm leading-tight">
-            NORMIES 3D {APP_VERSION}
-          </h2>
+          <h2 className="text-sm leading-tight">NORMIES 3D {APP_VERSION}</h2>
           <a
             href="https://x.com/0xfilter8"
             target="_blank"
@@ -355,6 +400,7 @@ export default function Page() {
         <button
           onClick={randomizeZ}
           className="border border-black/20 px-3 py-2 text-[10px] hover:bg-black/5"
+          style={{ touchAction: "manipulation" }}
           title="Double-tap on scene (mobile) randomizes"
         >
           RANDOM Z
@@ -372,6 +418,7 @@ export default function Page() {
         <button
           onClick={prevId}
           className="border border-black/20 px-3 py-2 text-[10px] hover:bg-black/5"
+          style={{ touchAction: "manipulation" }}
           title="Prev"
         >
           ◀
@@ -379,6 +426,7 @@ export default function Page() {
         <button
           onClick={nextId}
           className="border border-black/20 px-3 py-2 text-[10px] hover:bg-black/5"
+          style={{ touchAction: "manipulation" }}
           title="Next"
         >
           ▶
@@ -394,6 +442,7 @@ export default function Page() {
         <button
           onClick={exportPng}
           className="flex-1 border border-black/20 px-3 py-2 text-[10px] hover:bg-black/5"
+          style={{ touchAction: "manipulation" }}
           title="S"
         >
           EXPORT PNG
@@ -401,6 +450,7 @@ export default function Page() {
         <button
           onClick={reset}
           className="border border-black/20 px-3 py-2 text-[10px] hover:bg-black/5"
+          style={{ touchAction: "manipulation" }}
         >
           RESET
         </button>
@@ -410,6 +460,7 @@ export default function Page() {
         <button
           onClick={() => setAutoRotate((v) => !v)}
           className="flex-1 border border-black/20 px-3 py-2 text-[10px] hover:bg-black/5"
+          style={{ touchAction: "manipulation" }}
           title="R"
         >
           ROTATION: {autoRotate ? "ON" : "OFF"}
@@ -420,6 +471,7 @@ export default function Page() {
             if (el) void toggleFullscreen(el);
           }}
           className="border border-black/20 px-3 py-2 text-[10px] hover:bg-black/5"
+          style={{ touchAction: "manipulation" }}
           title="F"
         >
           FULL
@@ -440,6 +492,7 @@ export default function Page() {
         <button
           onClick={randomizeBlob}
           className="mt-3 w-full border border-black/20 px-3 py-2 text-[10px] hover:bg-black/5"
+          style={{ touchAction: "manipulation" }}
           title="B"
         >
           RANDOM BLOB
@@ -447,6 +500,7 @@ export default function Page() {
         <button
           onClick={() => setSeed((s) => s + 1)}
           className="mt-3 w-full border border-black/20 px-3 py-2 text-[10px] hover:bg-black/5"
+          style={{ touchAction: "manipulation" }}
         >
           REROLL GROUPS
         </button>
@@ -497,7 +551,7 @@ export default function Page() {
   );
 
   return (
-    <div className="h-screen bg-[#e3e5e4]">
+    <div className="h-screen bg-[#e3e5e4]" style={{ touchAction: "manipulation" }}>
       {/* Top bar (mobile only) */}
       <div className="md:hidden flex items-center justify-between border-b border-black/10 px-3 py-2">
         <div className="text-[10px] text-[#48494b]">
@@ -505,13 +559,14 @@ export default function Page() {
         </div>
         <button
           className="border border-black/20 px-3 py-2 text-[10px] text-[#48494b] hover:bg-black/5"
+          style={{ touchAction: "manipulation" }}
           onClick={() => setMenuOpen(true)}
         >
           MENU
         </button>
       </div>
 
-      {/* Desktop layout */}
+      {/* Desktop */}
       <div className="hidden md:grid h-[calc(100vh)] grid-cols-[380px_1fr]">
         <aside>{Sidebar}</aside>
         <main className="relative bg-[#e3e5e4]" ref={sceneContainerRef}>
@@ -533,11 +588,11 @@ export default function Page() {
         className="md:hidden relative h-[calc(100vh-41px)] bg-[#e3e5e4]"
         ref={sceneContainerRef}
       >
-        {/* ID + arrows */}
         <div className="absolute left-3 top-3 flex items-center gap-2">
           <button
             onClick={prevId}
             className="border border-black/20 bg-[#e3e5e4]/80 px-3 py-2 text-[10px] text-[#48494b]"
+            style={{ touchAction: "manipulation" }}
             aria-label="Previous"
           >
             ◀
@@ -548,17 +603,18 @@ export default function Page() {
           <button
             onClick={nextId}
             className="border border-black/20 bg-[#e3e5e4]/80 px-3 py-2 text-[10px] text-[#48494b]"
+            style={{ touchAction: "manipulation" }}
             aria-label="Next"
           >
             ▶
           </button>
         </div>
 
-        {/* Quick actions */}
         <div className="absolute right-3 top-3 flex items-center gap-2">
           <button
             onClick={exportPng}
             className="border border-black/20 bg-[#e3e5e4]/80 px-3 py-2 text-[10px] text-[#48494b]"
+            style={{ touchAction: "manipulation" }}
             title="S"
           >
             SAVE
@@ -566,6 +622,7 @@ export default function Page() {
           <button
             onClick={randomizeZ}
             className="border border-black/20 bg-[#e3e5e4]/80 px-3 py-2 text-[10px] text-[#48494b]"
+            style={{ touchAction: "manipulation" }}
             title="Double tap"
           >
             RAND
@@ -590,12 +647,14 @@ export default function Page() {
           <div
             className="absolute inset-0 bg-black/30"
             onClick={() => setMenuOpen(false)}
+            style={{ touchAction: "manipulation" }}
           />
           <div className="absolute left-0 top-0 h-full w-[320px] border-r border-black/10 bg-[#e3e5e4]">
             <div className="flex items-center justify-between border-b border-black/10 px-3 py-2">
               <div className="text-[10px] text-[#48494b]">MENU</div>
               <button
                 className="border border-black/20 px-3 py-2 text-[10px] text-[#48494b] hover:bg-black/5"
+                style={{ touchAction: "manipulation" }}
                 onClick={() => setMenuOpen(false)}
               >
                 CLOSE
@@ -606,7 +665,6 @@ export default function Page() {
         </div>
       ) : null}
 
-      {/* Pixel slider CSS */}
       <style jsx global>{`
         .pixel-range {
           -webkit-appearance: none;
