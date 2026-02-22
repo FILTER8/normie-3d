@@ -1,6 +1,9 @@
 /* ===========================
    app/page.tsx
    v1.6 — Scroll isolation + Desktop foldable menu + Preset labels
+   + ROT button cycles: OFF → SMOOTH → MIDDLE → FAST → OFF
+   + Smaller loading text
+   + Smooth RESET: pixels gather (starfield→0, z→0, extrude→1) + camera turns to front
    =========================== */
 "use client";
 
@@ -21,6 +24,20 @@ function clampId(n: number) {
 
 function clamp(n: number, a: number, b: number) {
   return Math.max(a, Math.min(b, n));
+}
+
+function easeInOutCubic(t: number) {
+  return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+}
+
+function lerp(a: number, b: number, t: number) {
+  return a + (b - a) * t;
+}
+
+function lerpArr(a: number[], b: number[], t: number) {
+  const out = new Array(Math.max(a.length, b.length));
+  for (let i = 0; i < out.length; i++) out[i] = lerp(a[i] ?? 0, b[i] ?? 0, t);
+  return out;
 }
 
 function PixelSlider({
@@ -166,6 +183,12 @@ function cycle(n: number, mod: number) {
 const LIGHT_NAMES = ["STUDIO", "TOP", "RIM", "FLAT", "DRAMA"] as const;
 const MAT_NAMES = ["MATTE", "GLOSS", "CHROME", "GLOW", "PASTEL"] as const;
 
+// ✅ ROT button cycles 4 modes
+const ROT_LABELS = ["OFF", "SMOOTH", "MIDDLE", "FAST"] as const;
+// ⬇️ Adjust rotation speeds here:
+const ROT_SPEEDS = [0, 0.7, 1.5, 3.0] as const;
+type RotMode = 0 | 1 | 2 | 3;
+
 export default function Page() {
   const sceneRef = useRef<SceneHandle | null>(null);
   const sceneContainerRef = useRef<HTMLDivElement | null>(null);
@@ -198,7 +221,13 @@ export default function Page() {
   const [noiseScale, setNoiseScale] = useState(6);
 
   const [seed, setSeed] = useState(1);
-  const [autoRotate, setAutoRotate] = useState(true);
+
+  // ✅ Rotation mode (OFF/SMOOTH/MIDDLE/FAST)
+  const [rotMode, setRotMode] = useState<RotMode>(2); // default MIDDLE
+  const rotLabel = ROT_LABELS[rotMode];
+  const autoRotate = rotMode !== 0;
+  const autoRotateSpeed = ROT_SPEEDS[rotMode];
+  const cycleRotMode = () => setRotMode((m) => (((m + 1) % 4) as RotMode));
 
   const [lightPreset, setLightPreset] = useState(0); // 0..4
   const [materialMode, setMaterialMode] = useState<MaterialMode>(0); // 0..4
@@ -206,7 +235,7 @@ export default function Page() {
   const lightName = LIGHT_NAMES[lightPreset % 5];
   const matName = MAT_NAMES[(materialMode % 5) as 0 | 1 | 2 | 3 | 4];
 
-  // ✅ Lock body scroll when mobile menu is open (prevents canvas/page scrolling)
+  // ✅ Lock body scroll when mobile menu is open
   useEffect(() => {
     if (!menuOpen) return;
     const prev = document.body.style.overflow;
@@ -273,7 +302,6 @@ export default function Page() {
   };
 
   const randomizeExtrude = () => {
-    // integer voxel blocks: 1..16 (no negatives)
     const rE = () => Math.floor(Math.random() * 16) + 1;
     setExtrude(Array.from({ length: 8 }, () => rE()));
     setSeed((s) => s + 1);
@@ -285,13 +313,39 @@ export default function Page() {
     setSeed((s) => s + 1);
   };
 
+  // ✅ Smooth RESET: camera -> front + gather pixels nicely
   const reset = () => {
-    setZ(Array.from({ length: 8 }, () => 0));
-    setExtrude(Array.from({ length: 8 }, () => 1));
-    setStarfield(0);
+    // static targets
+    const z0 = Array.from({ length: 8 }, () => 0);
+    const ex0 = Array.from({ length: 8 }, () => 1);
+
+    const zFrom = z.slice();
+    const exFrom = extrude.slice();
+    const starFrom = starfield;
+
+    // immediate reset for "non-animated" toggles
     setNoiseScale(6);
     setLightPreset(0);
     setMaterialMode(0);
+
+    // camera to front (requires NormieScene handle update below)
+    sceneRef.current?.resetFront?.(650);
+
+    const start = performance.now();
+    const dur = 1250;
+
+    const tick = (now: number) => {
+      const t = clamp((now - start) / dur, 0, 1);
+      const e = easeInOutCubic(t);
+
+      setStarfield(lerp(starFrom, 0, e));
+      setZ(lerpArr(zFrom, z0, e));
+      setExtrude(lerpArr(exFrom, ex0, e));
+
+      if (t < 1) requestAnimationFrame(tick);
+    };
+
+    requestAnimationFrame(tick);
   };
 
   const cycleLight = () => setLightPreset((p) => cycle(p, 5));
@@ -329,7 +383,7 @@ export default function Page() {
   };
 
   // ---- Keyboard shortcuts
-  // S save, R rotation toggle, F fullscreen, B random blob
+  // S save, R rot mode cycle, F fullscreen, B random blob
   // L light, M material, C chaos
   // ArrowLeft/ArrowRight prev/next id
   useEffect(() => {
@@ -345,7 +399,7 @@ export default function Page() {
       }
       if (k === "r") {
         e.preventDefault();
-        setAutoRotate((v) => !v);
+        cycleRotMode();
         return;
       }
       if (k === "f") {
@@ -389,7 +443,7 @@ export default function Page() {
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [id, isExporting, menuOpen, sidebarOpen, lightPreset, materialMode]);
+  }, [id, isExporting, menuOpen, sidebarOpen, lightPreset, materialMode, rotMode, starfield, z, extrude]);
 
   // ---- Swipe left/right + double tap randomize
   useEffect(() => {
@@ -493,7 +547,7 @@ export default function Page() {
       el.removeEventListener("pointercancel", onPointerCancel);
       clear();
     };
-  }, []);
+  }, [reset]);
 
   const arHref =
     `/api/ar/usdz?id=${id}` +
@@ -503,7 +557,6 @@ export default function Page() {
     `&noise=${noiseScale}` +
     `&star=0`;
 
-  // ✅ Scroll isolation wrapper for sidebar content
   const SidebarInner = (
     <div className="h-full overflow-y-auto overscroll-contain p-4">
       <div className="flex items-start justify-between gap-2">
@@ -529,7 +582,6 @@ export default function Page() {
         </button>
       </div>
 
-      {/* ✅ Preset labeled buttons */}
       <div className="mt-3 flex gap-2">
         <button
           onClick={cycleLight}
@@ -577,9 +629,12 @@ export default function Page() {
         </button>
       </div>
 
-      <div className="mt-3 text-[10px]">
-        {status.loading && <div>LOADING…</div>}
-        {status.error && <div className="text-red-700">{status.error}</div>}
+      {/* ✅ smaller loading */}
+      <div className="mt-3 text-[9px] opacity-70">
+        {status.loading && <div>loading…</div>}
+        {status.error && (
+          <div className="text-red-700 opacity-100">{status.error}</div>
+        )}
       </div>
 
       <div className="mt-4 flex gap-2">
@@ -602,14 +657,16 @@ export default function Page() {
       </div>
 
       <div className="mt-4 flex gap-2">
+        {/* ✅ ROT button cycles modes */}
         <button
-          onClick={() => setAutoRotate((v) => !v)}
+          onClick={cycleRotMode}
           className="flex-1 border border-black/20 px-3 py-2 text-[10px] hover:bg-black/5"
           style={{ touchAction: "manipulation" }}
           title="R"
         >
-          ROT: {autoRotate ? "ON" : "OFF"}
+          ROT: {rotLabel}
         </button>
+
         <button
           onClick={() => {
             const el = sceneContainerRef.current;
@@ -729,7 +786,6 @@ export default function Page() {
   );
 
   return (
-    // ✅ Root is fixed and never scrolls (canvas never lost)
     <div className="fixed inset-0 bg-[#e3e5e4] overflow-hidden">
       {/* Top bar (mobile only) */}
       <div className="md:hidden flex items-center justify-between border-b border-black/10 px-3 py-2 gap-2">
@@ -758,24 +814,27 @@ export default function Page() {
 
       {/* Desktop layout */}
       <div className="hidden md:flex h-full">
-<aside
-  className={`relative h-full shrink-0 flex-none overflow-hidden border-r border-black/10 bg-[#e3e5e4] text-[#48494b] transition-[width] duration-200 ${
-    sidebarOpen ? "w-[380px]" : "w-[44px]"
-  }`}
->
-  <button
-    onClick={() => setSidebarOpen((v) => !v)}
-    className="absolute right-0 top-0 border-l border-b border-black/10 bg-[#e3e5e4] px-3 py-2 text-[10px] hover:bg-black/5"
-    style={{ touchAction: "manipulation" }}
-    title="Toggle sidebar"
-  >
-    {sidebarOpen ? "⟨⟨" : "⟩⟩"}
-  </button>
+        <aside
+          className={`relative h-full shrink-0 flex-none overflow-hidden border-r border-black/10 bg-[#e3e5e4] text-[#48494b] transition-[width] duration-200 ${
+            sidebarOpen ? "w-[380px]" : "w-[44px]"
+          }`}
+        >
+          <button
+            onClick={() => setSidebarOpen((v) => !v)}
+            className="absolute right-0 top-0 border-l border-b border-black/10 bg-[#e3e5e4] px-3 py-2 text-[10px] hover:bg-black/5"
+            style={{ touchAction: "manipulation" }}
+            title="Toggle sidebar"
+          >
+            {sidebarOpen ? "⟨⟨" : "⟩⟩"}
+          </button>
 
-  {sidebarOpen ? SidebarInner : null}
-</aside>
+          {sidebarOpen ? SidebarInner : null}
+        </aside>
 
-        <main className="relative flex-1 bg-[#e3e5e4]" ref={sceneContainerRef}>
+        <main
+          className="relative flex-1 min-w-0 bg-[#e3e5e4]"
+          ref={sceneContainerRef}
+        >
           <NormieScene
             ref={sceneRef}
             pixels={pixels}
@@ -784,10 +843,10 @@ export default function Page() {
             starfield={starfield}
             seed={seed}
             autoRotate={autoRotate}
+            autoRotateSpeed={autoRotateSpeed}
             noiseScale={noiseScale}
             lightPreset={lightPreset}
             materialMode={materialMode}
-            containerRef={sceneContainerRef}
           />
         </main>
       </div>
@@ -849,10 +908,10 @@ export default function Page() {
           starfield={starfield}
           seed={seed}
           autoRotate={autoRotate}
+          autoRotateSpeed={autoRotateSpeed}
           noiseScale={noiseScale}
           lightPreset={lightPreset}
           materialMode={materialMode}
-          containerRef={sceneContainerRef}
         />
       </div>
 
@@ -876,7 +935,6 @@ export default function Page() {
               </button>
             </div>
 
-            {/* ✅ scroll container isolated; overscroll does NOT affect canvas */}
             <div className="flex-1 overflow-y-auto overscroll-contain">
               {SidebarInner}
             </div>

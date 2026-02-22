@@ -1,9 +1,12 @@
 /* ===========================
    app/components/NormieVoxels.tsx
-   + MATERIAL modes
-   + per-group extrude in INTEGER voxel blocks
+   Instanced performance version
+   - FIX: no ref read/write during render
+   - FIX: writeMatricesForCubeIndex is useCallback (deps clean)
    =========================== */
-import { useMemo } from "react";
+"use client";
+
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
 
 export type MaterialMode = 0 | 1 | 2 | 3 | 4;
@@ -65,7 +68,6 @@ function clamp(n: number, a: number, b: number) {
 }
 
 function hueToHex(h: number, s: number, l: number) {
-  // HSL -> hex (small helper)
   const a = s * Math.min(l, 1 - l);
   const f = (n: number) => {
     const k = (n + h * 12) % 12;
@@ -79,6 +81,17 @@ function hueToHex(h: number, s: number, l: number) {
 }
 
 const DEFAULT_EXTRUDE = Array.from({ length: 8 }, () => 1);
+
+type Cube = {
+  bx: number;
+  by: number;
+  bz: number;
+  tx: number;
+  ty: number;
+  tz: number;
+  group: number; // 0..7
+  jitter: number;
+};
 
 export function NormieVoxels({
   pixels,
@@ -102,18 +115,11 @@ export function NormieVoxels({
   materialMode: MaterialMode;
 }) {
   const exArr = extrude ?? DEFAULT_EXTRUDE;
+  const mode = (materialMode % 5) as MaterialMode;
 
-  const cubes = useMemo(() => {
-    const out: {
-      bx: number;
-      by: number;
-      bz: number;
-      tx: number;
-      ty: number;
-      tz: number;
-      group: number; // 0..7
-      jitter: number;
-    }[] = [];
+  // --- Build cube descriptors once per pixels/seed/noiseScale
+  const cubes: Cube[] = useMemo(() => {
+    const out: Cube[] = [];
 
     const W = 40,
       H = 40;
@@ -122,7 +128,6 @@ export function NormieVoxels({
 
     const R = 12;
     const shellBias = 0.35;
-
     const freq = 1 / Math.max(1.5, noiseScale);
 
     for (let i = 0; i < pixels.length; i++) {
@@ -165,17 +170,13 @@ export function NormieVoxels({
     return out;
   }, [pixels, pixelSize, depth, seed, noiseScale]);
 
+  // --- Materials
   const normieColor = "#48494b";
 
   const materials = useMemo(() => {
-    // Make shared material(s) so we don't create 1000s of materials
-    const mode = materialMode % 5;
-
     if (mode === 4) {
-      // Pastel by group (8 materials)
       const arr: THREE.MeshStandardMaterial[] = [];
       for (let g = 0; g < 8; g++) {
-        // stable pastel palette based on seed+group
         const h = (xorshift32((seed + 17) * 1009 + g * 97) * 0.9 + 0.05) % 1;
         const hex = hueToHex(h, 0.45, 0.78);
         arr.push(
@@ -198,21 +199,16 @@ export function NormieVoxels({
     });
 
     if (mode === 0) {
-      // Matte
       base.roughness = 0.92;
       base.metalness = 0.0;
       return [base];
     }
-
     if (mode === 1) {
-      // Glossy
       base.roughness = 0.18;
       base.metalness = 0.0;
       return [base];
     }
-
     if (mode === 2) {
-      // Chrome-ish
       base.roughness = 0.05;
       base.metalness = 1.0;
       return [base];
@@ -224,42 +220,129 @@ export function NormieVoxels({
     base.emissive = new THREE.Color(normieColor);
     base.emissiveIntensity = 0.55;
     return [base];
-  }, [materialMode, seed]);
+  }, [mode, seed]);
+
+  useEffect(() => {
+    return () => {
+      materials.forEach((m) => m.dispose());
+    };
+  }, [materials]);
+
+  // --- Geometry: unit cube (Z scaled per instance)
+  const geom = useMemo(() => new THREE.BoxGeometry(pixelSize, pixelSize, pixelSize), [pixelSize]);
+
+  useEffect(() => {
+    return () => geom.dispose();
+  }, [geom]);
+
+  // --- Group indices for pastel mode
+  const indicesByGroup = useMemo(() => {
+    const arr: number[][] = Array.from({ length: 8 }, () => []);
+    for (let i = 0; i < cubes.length; i++) arr[cubes[i].group].push(i);
+    return arr;
+  }, [cubes]);
+
+  // --- Instanced mesh refs
+  const instRefSingle = useRef<THREE.InstancedMesh | null>(null);
+
+  // ✅ FIX: initialize ONCE (no render-time ref access/mutation)
+  const instRefByGroup = useRef<(THREE.InstancedMesh | null)[]>(
+    Array.from({ length: 8 }, () => null)
+  );
+
+  // --- Shared dummy object to write matrices
+  const dummy = useMemo(() => new THREE.Object3D(), []);
+
+  // ✅ FIX: make writer stable via useCallback (deps clean)
+  const writeMatricesForCube = useCallback(
+    (mesh: THREE.InstancedMesh, instanceId: number, cube: Cube) => {
+      const zOff = z[cube.group] ?? 0;
+
+      const rawBlocks = Math.round(exArr[cube.group] ?? 1);
+      const blocks = clamp(rawBlocks, 1, 16);
+
+      const blocksBlend = lerp(blocks, 1, starfield);
+      const thick = pixelSize * blocksBlend;
+      const zScale = thick / pixelSize;
+
+      const zBlend = 1 - starfield;
+      const baseZ = cube.bz + cube.jitter + zOff * zBlend;
+
+      const x = lerp(cube.bx, cube.tx, starfield);
+      const y = lerp(cube.by, cube.ty, starfield);
+
+      const zPos = lerp(baseZ + (thick - pixelSize) * 0.5, cube.tz, starfield);
+
+      dummy.position.set(x, y, zPos);
+      dummy.scale.set(1, 1, zScale);
+      dummy.updateMatrix();
+
+      mesh.setMatrixAt(instanceId, dummy.matrix);
+    },
+    [dummy, exArr, pixelSize, starfield, z]
+  );
+
+  // Update single instanced mesh
+  useLayoutEffect(() => {
+    if (mode === 4) return;
+    const mesh = instRefSingle.current;
+    if (!mesh) return;
+
+    for (let i = 0; i < cubes.length; i++) {
+      writeMatricesForCube(mesh, i, cubes[i]);
+    }
+
+    mesh.instanceMatrix.needsUpdate = true;
+  }, [mode, cubes, writeMatricesForCube]);
+
+  // Update pastel mode meshes
+  useLayoutEffect(() => {
+    if (mode !== 4) return;
+
+    for (let g = 0; g < 8; g++) {
+      const mesh = instRefByGroup.current[g];
+      if (!mesh) continue;
+
+      const idxs = indicesByGroup[g];
+      for (let j = 0; j < idxs.length; j++) {
+        writeMatricesForCube(mesh, j, cubes[idxs[j]]);
+      }
+
+      mesh.instanceMatrix.needsUpdate = true;
+    }
+  }, [mode, cubes, indicesByGroup, writeMatricesForCube]);
 
   return (
     <group position={[0, 0.05, 0]}>
-      {cubes.map((c, i) => {
-        const zOff = z[c.group] ?? 0;
+      {/* Modes 0..3: one instanced mesh */}
+      {mode !== 4 ? (
+        <instancedMesh
+          ref={(m) => {
+            instRefSingle.current = m;
+          }}
+          args={[geom, materials[0], cubes.length]}
+          frustumCulled={false}
+        />
+      ) : null}
 
-        // integer "block count" extrude, minimum 1
-        const rawBlocks = Math.round(exArr[c.group] ?? 1);
-        const blocks = clamp(rawBlocks, 1, 16); // allow more extreme
-        // blend back to 1 as starfield increases
-        const blocksBlend = lerp(blocks, 1, starfield);
+      {/* Mode 4: 8 instanced meshes */}
+      {mode === 4
+        ? Array.from({ length: 8 }).map((_, g) => {
+            const count = indicesByGroup[g].length;
+            if (count === 0) return null;
 
-        const thick = pixelSize * blocksBlend;
-
-        // fade Z offsets out as starfield increases
-        const zBlend = 1 - starfield;
-        const baseZ = c.bz + c.jitter + zOff * zBlend;
-
-        const x = lerp(c.bx, c.tx, starfield);
-        const y = lerp(c.by, c.ty, starfield);
-
-        // shift so extra thickness grows outward a bit (relief feel)
-        const zPos = lerp(baseZ + (thick - pixelSize) * 0.5, c.tz, starfield);
-
-        const mat =
-          (materialMode % 5) === 4
-            ? materials[c.group] ?? materials[0]
-            : materials[0];
-
-        return (
-          <mesh key={i} position={[x, y, zPos]} material={mat}>
-            <boxGeometry args={[pixelSize, pixelSize, thick]} />
-          </mesh>
-        );
-      })}
+            return (
+              <instancedMesh
+                key={g}
+                ref={(m) => {
+                  instRefByGroup.current[g] = m;
+                }}
+                args={[geom, materials[g] ?? materials[0], count]}
+                frustumCulled={false}
+              />
+            );
+          })
+        : null}
     </group>
   );
 }
