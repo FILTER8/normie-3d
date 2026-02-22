@@ -1,9 +1,13 @@
 /* ===========================
    app/components/NormieVoxels.tsx
-   8 contiguous NOISE groups (smooth field) + universe sphere starfield
+   + MATERIAL modes
    + per-group extrude in INTEGER voxel blocks
    =========================== */
 import { useMemo } from "react";
+import * as THREE from "three";
+
+export type MaterialMode = 0 | 1 | 2 | 3 | 4;
+// 0 Matte, 1 Glossy, 2 Chrome, 3 Emissive, 4 Pastel-By-Group
 
 function xorshift32(seed: number) {
   let x = seed | 0;
@@ -60,17 +64,32 @@ function clamp(n: number, a: number, b: number) {
   return Math.max(a, Math.min(b, n));
 }
 
+function hueToHex(h: number, s: number, l: number) {
+  // HSL -> hex (small helper)
+  const a = s * Math.min(l, 1 - l);
+  const f = (n: number) => {
+    const k = (n + h * 12) % 12;
+    const c = l - a * Math.max(-1, Math.min(k - 3, Math.min(9 - k, 1)));
+    return Math.round(255 * c);
+  };
+  const r = f(0);
+  const g = f(8);
+  const b = f(4);
+  return `#${[r, g, b].map((v) => v.toString(16).padStart(2, "0")).join("")}`;
+}
+
 const DEFAULT_EXTRUDE = Array.from({ length: 8 }, () => 1);
 
 export function NormieVoxels({
   pixels,
   pixelSize = 0.08,
   depth = 0.12,
-  z, // 8 sliders
-  extrude, // 8 sliders (integer blocks, >=1)
-  starfield, // 0..1
+  z,
+  extrude,
+  starfield,
   seed,
-  noiseScale, // controls group blob size
+  noiseScale,
+  materialMode,
 }: {
   pixels: string;
   pixelSize?: number;
@@ -80,6 +99,7 @@ export function NormieVoxels({
   starfield: number;
   seed: number;
   noiseScale: number; // 2..16
+  materialMode: MaterialMode;
 }) {
   const exArr = extrude ?? DEFAULT_EXTRUDE;
 
@@ -93,7 +113,6 @@ export function NormieVoxels({
       tz: number;
       group: number; // 0..7
       jitter: number;
-      idx: number;
     }[] = [];
 
     const W = 40,
@@ -140,7 +159,6 @@ export function NormieVoxels({
         ty: dir.y * radius,
         tz: dir.z * radius,
         group,
-        idx: i,
       });
     }
 
@@ -149,6 +167,65 @@ export function NormieVoxels({
 
   const normieColor = "#48494b";
 
+  const materials = useMemo(() => {
+    // Make shared material(s) so we don't create 1000s of materials
+    const mode = materialMode % 5;
+
+    if (mode === 4) {
+      // Pastel by group (8 materials)
+      const arr: THREE.MeshStandardMaterial[] = [];
+      for (let g = 0; g < 8; g++) {
+        // stable pastel palette based on seed+group
+        const h = (xorshift32((seed + 17) * 1009 + g * 97) * 0.9 + 0.05) % 1;
+        const hex = hueToHex(h, 0.45, 0.78);
+        arr.push(
+          new THREE.MeshStandardMaterial({
+            color: new THREE.Color(hex),
+            roughness: 0.85,
+            metalness: 0.0,
+            toneMapped: false,
+          })
+        );
+      }
+      return arr;
+    }
+
+    const base = new THREE.MeshStandardMaterial({
+      color: new THREE.Color(normieColor),
+      roughness: 0.9,
+      metalness: 0.0,
+      toneMapped: false,
+    });
+
+    if (mode === 0) {
+      // Matte
+      base.roughness = 0.92;
+      base.metalness = 0.0;
+      return [base];
+    }
+
+    if (mode === 1) {
+      // Glossy
+      base.roughness = 0.18;
+      base.metalness = 0.0;
+      return [base];
+    }
+
+    if (mode === 2) {
+      // Chrome-ish
+      base.roughness = 0.05;
+      base.metalness = 1.0;
+      return [base];
+    }
+
+    // mode === 3 Emissive
+    base.roughness = 0.75;
+    base.metalness = 0.0;
+    base.emissive = new THREE.Color(normieColor);
+    base.emissiveIntensity = 0.55;
+    return [base];
+  }, [materialMode, seed]);
+
   return (
     <group position={[0, 0.05, 0]}>
       {cubes.map((c, i) => {
@@ -156,7 +233,7 @@ export function NormieVoxels({
 
         // integer "block count" extrude, minimum 1
         const rawBlocks = Math.round(exArr[c.group] ?? 1);
-        const blocks = clamp(rawBlocks, 1, 12); // cap safety
+        const blocks = clamp(rawBlocks, 1, 16); // allow more extreme
         // blend back to 1 as starfield increases
         const blocksBlend = lerp(blocks, 1, starfield);
 
@@ -172,15 +249,14 @@ export function NormieVoxels({
         // shift so extra thickness grows outward a bit (relief feel)
         const zPos = lerp(baseZ + (thick - pixelSize) * 0.5, c.tz, starfield);
 
+        const mat =
+          (materialMode % 5) === 4
+            ? materials[c.group] ?? materials[0]
+            : materials[0];
+
         return (
-          <mesh key={i} position={[x, y, zPos]}>
+          <mesh key={i} position={[x, y, zPos]} material={mat}>
             <boxGeometry args={[pixelSize, pixelSize, thick]} />
-            <meshStandardMaterial
-              color={normieColor}
-              roughness={0.9}
-              metalness={0}
-              toneMapped={false}
-            />
           </mesh>
         );
       })}

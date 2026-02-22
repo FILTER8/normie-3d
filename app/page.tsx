@@ -1,14 +1,15 @@
 /* ===========================
    app/page.tsx
-   v1.4 — Mobile export UX improved + AR params include extrude
+   v1.6 — Scroll isolation + Desktop foldable menu + Preset labels
    =========================== */
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { fetchPixels, fetchTraits } from "./lib/normiesApi";
 import { NormieScene, type SceneHandle } from "./components/NormieScene";
+import type { MaterialMode } from "./components/NormieVoxels";
 
-const APP_VERSION = "v1.4";
+const APP_VERSION = "v1.6";
 
 type Trait = { trait_type: string; value: string | number | boolean | null };
 type TraitsResponse = { attributes?: Trait[] };
@@ -16,6 +17,10 @@ type TraitsResponse = { attributes?: Trait[] };
 function clampId(n: number) {
   if (Number.isNaN(n)) return 0;
   return Math.max(0, Math.min(9999, n));
+}
+
+function clamp(n: number, a: number, b: number) {
+  return Math.max(a, Math.min(b, n));
 }
 
 function PixelSlider({
@@ -59,7 +64,12 @@ function PixelSlider({
   );
 }
 
-async function downloadWithStamp(dataUrl: string, filename: string, stamp: string) {
+// Mobile-friendly export: defer heavy work so UI updates first
+async function downloadWithStamp(
+  dataUrl: string,
+  filename: string,
+  stamp: string
+) {
   await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
 
   const img = new Image();
@@ -149,15 +159,22 @@ function isTypingTarget(target: EventTarget | null): boolean {
   return tag === "input" || tag === "textarea" || target.isContentEditable;
 }
 
-function clamp(n: number, a: number, b: number) {
-  return Math.max(a, Math.min(b, n));
+function cycle(n: number, mod: number) {
+  return (n + 1) % mod;
 }
+
+const LIGHT_NAMES = ["STUDIO", "TOP", "RIM", "FLAT", "DRAMA"] as const;
+const MAT_NAMES = ["MATTE", "GLOSS", "CHROME", "GLOW", "PASTEL"] as const;
 
 export default function Page() {
   const sceneRef = useRef<SceneHandle | null>(null);
   const sceneContainerRef = useRef<HTMLDivElement | null>(null);
 
+  // mobile drawer
   const [menuOpen, setMenuOpen] = useState(false);
+  // desktop fold
+  const [sidebarOpen, setSidebarOpen] = useState(true);
+
   const [isExporting, setIsExporting] = useState(false);
 
   const [idInput, setIdInput] = useState("0");
@@ -170,16 +187,11 @@ export default function Page() {
   const Z_MIN = -2.5;
   const Z_MAX = 2.5;
 
-  // integer extrude blocks
-  const EX_MIN = 1;
-  const EX_MAX = 16;
-
-  const [z, setZ] = useState<number[]>(
-    () => Array.from({ length: 8 }, () => 0)
+  const [z, setZ] = useState<number[]>(() =>
+    Array.from({ length: 8 }, () => 0)
   );
-
-  const [extrude, setExtrude] = useState<number[]>(
-    () => Array.from({ length: 8 }, () => 1)
+  const [extrude, setExtrude] = useState<number[]>(() =>
+    Array.from({ length: 8 }, () => 1)
   );
 
   const [starfield, setStarfield] = useState(0);
@@ -188,10 +200,28 @@ export default function Page() {
   const [seed, setSeed] = useState(1);
   const [autoRotate, setAutoRotate] = useState(true);
 
+  const [lightPreset, setLightPreset] = useState(0); // 0..4
+  const [materialMode, setMaterialMode] = useState<MaterialMode>(0); // 0..4
+
+  const lightName = LIGHT_NAMES[lightPreset % 5];
+  const matName = MAT_NAMES[(materialMode % 5) as 0 | 1 | 2 | 3 | 4];
+
+  // ✅ Lock body scroll when mobile menu is open (prevents canvas/page scrolling)
+  useEffect(() => {
+    if (!menuOpen) return;
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = prev;
+    };
+  }, [menuOpen]);
+
+  // ✅ Random ID on first load
   useEffect(() => {
     setIdInput(String(Math.floor(Math.random() * 10000)));
   }, []);
 
+  // ---- Data loading
   useEffect(() => {
     let cancelled = false;
     setStatus({ loading: true, error: "" });
@@ -224,7 +254,7 @@ export default function Page() {
     });
   };
 
-  const setExtrudeAt = (idx: number, value: number) => {
+  const setExAt = (idx: number, value: number) => {
     setExtrude((prev) => {
       const next = prev.slice();
       next[idx] = value;
@@ -236,17 +266,21 @@ export default function Page() {
   const prevId = () => setId(id - 1);
   const nextId = () => setId(id + 1);
 
-  const randomizeAll = () => {
+  const randomizeZ = () => {
     const rZ = () => Math.random() * (Z_MAX - Z_MIN) + Z_MIN;
-    const rE = () => Math.floor(Math.random() * (EX_MAX - EX_MIN + 1)) + EX_MIN;
-
     setZ(Array.from({ length: 8 }, () => rZ()));
+    setSeed((s) => s + 1);
+  };
+
+  const randomizeExtrude = () => {
+    // integer voxel blocks: 1..16 (no negatives)
+    const rE = () => Math.floor(Math.random() * 16) + 1;
     setExtrude(Array.from({ length: 8 }, () => rE()));
     setSeed((s) => s + 1);
   };
 
   const randomizeBlob = () => {
-    const v = Math.floor(Math.random() * (16 - 2 + 1)) + 2;
+    const v = Math.floor(Math.random() * (16 - 2 + 1)) + 2; // 2..16
     setNoiseScale(v);
     setSeed((s) => s + 1);
   };
@@ -255,6 +289,27 @@ export default function Page() {
     setZ(Array.from({ length: 8 }, () => 0));
     setExtrude(Array.from({ length: 8 }, () => 1));
     setStarfield(0);
+    setNoiseScale(6);
+    setLightPreset(0);
+    setMaterialMode(0);
+  };
+
+  const cycleLight = () => setLightPreset((p) => cycle(p, 5));
+  const cycleMaterial = () =>
+    setMaterialMode((m) => (cycle(m, 5) as MaterialMode));
+
+  const chaos = () => {
+    const rZ = () => Math.random() * (Z_MAX - Z_MIN) + Z_MIN;
+    const rE = () => Math.floor(Math.random() * 16) + 1;
+    const rNoise = () => Math.floor(Math.random() * (16 - 2 + 1)) + 2;
+
+    setZ(Array.from({ length: 8 }, () => rZ()));
+    setExtrude(Array.from({ length: 8 }, () => rE()));
+    setNoiseScale(rNoise());
+    setStarfield(Math.random() < 0.25 ? 0 : clamp(Math.random(), 0, 1));
+    setLightPreset(Math.floor(Math.random() * 5));
+    setMaterialMode(Math.floor(Math.random() * 5) as MaterialMode);
+    setSeed((s) => s + 1);
   };
 
   const exportPng = async () => {
@@ -273,6 +328,10 @@ export default function Page() {
     }
   };
 
+  // ---- Keyboard shortcuts
+  // S save, R rotation toggle, F fullscreen, B random blob
+  // L light, M material, C chaos
+  // ArrowLeft/ArrowRight prev/next id
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       if (isTypingTarget(e.target)) return;
@@ -300,6 +359,21 @@ export default function Page() {
         randomizeBlob();
         return;
       }
+      if (k === "l") {
+        e.preventDefault();
+        cycleLight();
+        return;
+      }
+      if (k === "m") {
+        e.preventDefault();
+        cycleMaterial();
+        return;
+      }
+      if (k === "c") {
+        e.preventDefault();
+        chaos();
+        return;
+      }
 
       if (e.key === "ArrowLeft") {
         e.preventDefault();
@@ -315,8 +389,9 @@ export default function Page() {
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [id, isExporting]);
+  }, [id, isExporting, menuOpen, sidebarOpen, lightPreset, materialMode]);
 
+  // ---- Swipe left/right + double tap randomize
   useEffect(() => {
     const el = sceneContainerRef.current;
     if (!el) return;
@@ -324,7 +399,6 @@ export default function Page() {
     let startX = 0;
     let startY = 0;
     let startT = 0;
-
     let lastTapT = 0;
 
     const onTouchStart = (ev: TouchEvent) => {
@@ -336,7 +410,7 @@ export default function Page() {
 
       const now = Date.now();
       if (now - lastTapT < 260) {
-        randomizeAll();
+        randomizeZ();
         lastTapT = 0;
       } else {
         lastTapT = now;
@@ -367,6 +441,7 @@ export default function Page() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
+  // ✅ Long press on scene = RESET (works for touch + mouse)
   useEffect(() => {
     const el = sceneContainerRef.current;
     if (!el) return;
@@ -420,15 +495,17 @@ export default function Page() {
     };
   }, []);
 
-  const arHref = `/api/ar/usdz?id=${id}` +
+  const arHref =
+    `/api/ar/usdz?id=${id}` +
     `&z=${encodeURIComponent(z.join(","))}` +
     `&ex=${encodeURIComponent(extrude.join(","))}` +
     `&seed=${seed}` +
     `&noise=${noiseScale}` +
     `&star=0`;
 
-  const Sidebar = (
-    <div className="bg-[#e3e5e4] text-[#48494b] border-r border-black/10 p-4 h-full overflow-auto">
+  // ✅ Scroll isolation wrapper for sidebar content
+  const SidebarInner = (
+    <div className="h-full overflow-y-auto overscroll-contain p-4">
       <div className="flex items-start justify-between gap-2">
         <div>
           <h2 className="text-sm leading-tight">NORMIES 3D {APP_VERSION}</h2>
@@ -443,16 +520,38 @@ export default function Page() {
         </div>
 
         <button
-          onClick={randomizeAll}
+          onClick={chaos}
           className="border border-black/20 px-3 py-2 text-[10px] hover:bg-black/5"
           style={{ touchAction: "manipulation" }}
-          title="Double-tap on scene (mobile) randomizes"
+          title="C"
         >
-          RANDOM
+          CHAOS
         </button>
       </div>
 
-      <label className="mt-4 block text-[10px] opacity-80">TOKEN ID (0–9999)</label>
+      {/* ✅ Preset labeled buttons */}
+      <div className="mt-3 flex gap-2">
+        <button
+          onClick={cycleLight}
+          className="flex-1 border border-black/20 px-3 py-2 text-[10px] hover:bg-black/5"
+          style={{ touchAction: "manipulation" }}
+          title="L"
+        >
+          LIGHT: {lightName}
+        </button>
+        <button
+          onClick={cycleMaterial}
+          className="flex-1 border border-black/20 px-3 py-2 text-[10px] hover:bg-black/5"
+          style={{ touchAction: "manipulation" }}
+          title="M"
+        >
+          MAT: {matName}
+        </button>
+      </div>
+
+      <label className="mt-4 block text-[10px] opacity-80">
+        TOKEN ID (0–9999)
+      </label>
       <div className="mt-2 flex gap-2">
         <input
           value={idInput}
@@ -509,7 +608,7 @@ export default function Page() {
           style={{ touchAction: "manipulation" }}
           title="R"
         >
-          ROTATION: {autoRotate ? "ON" : "OFF"}
+          ROT: {autoRotate ? "ON" : "OFF"}
         </button>
         <button
           onClick={() => {
@@ -529,7 +628,7 @@ export default function Page() {
         <PixelSlider
           label="BLOB SIZE"
           value={noiseScale}
-          onChange={(v) => setNoiseScale(Math.max(2, Math.min(16, Math.round(v))))}
+          onChange={(v) => setNoiseScale(clamp(Math.round(v), 2, 16))}
           min={2}
           max={16}
           step={1}
@@ -553,32 +652,39 @@ export default function Page() {
       </div>
 
       <div className="mt-6">
-        <div className="text-[10px] opacity-80">DEPTH (8 GROUPS)</div>
-        {Array.from({ length: 8 }).map((_, i) => (
-          <PixelSlider
-            key={i}
-            label={`${i + 1}`}
-            value={z[i]}
-            onChange={(v) => setZAt(i, clamp(v, Z_MIN, Z_MAX))}
-            min={Z_MIN}
-            max={Z_MAX}
-            step={0.01}
-          />
-        ))}
-      </div>
-
-      <div className="mt-6">
         <div className="text-[10px] opacity-80">EXTRUDE (BLOCKS)</div>
         {Array.from({ length: 8 }).map((_, i) => (
           <PixelSlider
             key={i}
             label={`${i + 1}`}
             value={extrude[i]}
-            onChange={(v) => setExtrudeAt(i, clamp(Math.round(v), EX_MIN, EX_MAX))}
-            min={EX_MIN}
-            max={EX_MAX}
+            onChange={(v) => setExAt(i, clamp(Math.round(v), 1, 16))}
+            min={1}
+            max={16}
             step={1}
             int
+          />
+        ))}
+        <button
+          onClick={randomizeExtrude}
+          className="mt-3 w-full border border-black/20 px-3 py-2 text-[10px] hover:bg-black/5"
+          style={{ touchAction: "manipulation" }}
+        >
+          RANDOM EXTRUDE
+        </button>
+      </div>
+
+      <div className="mt-6">
+        <div className="text-[10px] opacity-80">DEPTH (8 GROUPS)</div>
+        {Array.from({ length: 8 }).map((_, i) => (
+          <PixelSlider
+            key={i}
+            label={`${i + 1}`}
+            value={z[i]}
+            onChange={(v) => setZAt(i, v)}
+            min={Z_MIN}
+            max={Z_MAX}
+            step={0.01}
           />
         ))}
       </div>
@@ -603,17 +709,28 @@ export default function Page() {
           <ul className="mt-2 space-y-1 text-[10px]">
             {traits.attributes.map((a: Trait, i: number) => (
               <li key={i}>
-                <span className="opacity-70">{a.trait_type}:</span> {String(a.value)}
+                <span className="opacity-70">{a.trait_type}:</span>{" "}
+                {String(a.value)}
               </li>
             ))}
           </ul>
         )}
       </div>
+
+      <div className="mt-8">
+        <a
+          href={arHref}
+          className="block border border-black/20 px-3 py-2 text-[10px] hover:bg-black/5 text-center"
+        >
+          AR (iPhone)
+        </a>
+      </div>
     </div>
   );
 
   return (
-    <div className="h-screen bg-[#e3e5e4]" style={{ touchAction: "manipulation" }}>
+    // ✅ Root is fixed and never scrolls (canvas never lost)
+    <div className="fixed inset-0 bg-[#e3e5e4] overflow-hidden">
       {/* Top bar (mobile only) */}
       <div className="md:hidden flex items-center justify-between border-b border-black/10 px-3 py-2 gap-2">
         <div className="text-[10px] text-[#48494b] whitespace-nowrap">
@@ -639,10 +756,26 @@ export default function Page() {
         </div>
       </div>
 
-      {/* Desktop */}
-      <div className="hidden md:grid h-[calc(100vh)] grid-cols-[380px_1fr]">
-        <aside>{Sidebar}</aside>
-        <main className="relative bg-[#e3e5e4]" ref={sceneContainerRef}>
+      {/* Desktop layout */}
+      <div className="hidden md:flex h-full">
+<aside
+  className={`relative h-full shrink-0 flex-none overflow-hidden border-r border-black/10 bg-[#e3e5e4] text-[#48494b] transition-[width] duration-200 ${
+    sidebarOpen ? "w-[380px]" : "w-[44px]"
+  }`}
+>
+  <button
+    onClick={() => setSidebarOpen((v) => !v)}
+    className="absolute right-0 top-0 border-l border-b border-black/10 bg-[#e3e5e4] px-3 py-2 text-[10px] hover:bg-black/5"
+    style={{ touchAction: "manipulation" }}
+    title="Toggle sidebar"
+  >
+    {sidebarOpen ? "⟨⟨" : "⟩⟩"}
+  </button>
+
+  {sidebarOpen ? SidebarInner : null}
+</aside>
+
+        <main className="relative flex-1 bg-[#e3e5e4]" ref={sceneContainerRef}>
           <NormieScene
             ref={sceneRef}
             pixels={pixels}
@@ -652,6 +785,8 @@ export default function Page() {
             seed={seed}
             autoRotate={autoRotate}
             noiseScale={noiseScale}
+            lightPreset={lightPreset}
+            materialMode={materialMode}
             containerRef={sceneContainerRef}
           />
         </main>
@@ -659,10 +794,11 @@ export default function Page() {
 
       {/* Mobile scene */}
       <div
-        className="md:hidden relative h-[calc(100vh-41px)] bg-[#e3e5e4]"
+        className="md:hidden relative bg-[#e3e5e4]"
+        style={{ height: "calc(100% - 41px)" }}
         ref={sceneContainerRef}
       >
-        <div className="absolute left-3 top-3 flex items-center gap-2">
+        <div className="absolute left-3 top-3 z-10 flex items-center gap-2">
           <button
             onClick={prevId}
             className="border border-black/20 bg-[#e3e5e4]/80 px-3 py-2 text-[10px] text-[#48494b]"
@@ -684,7 +820,7 @@ export default function Page() {
           </button>
         </div>
 
-        <div className="absolute right-3 top-3 flex items-center gap-2">
+        <div className="absolute right-3 top-3 z-10 flex items-center gap-2">
           <button
             onClick={() => void exportPng()}
             disabled={isExporting}
@@ -694,13 +830,14 @@ export default function Page() {
           >
             {isExporting ? "SAVING…" : "SAVE"}
           </button>
+
           <button
-            onClick={randomizeAll}
+            onClick={chaos}
             className="border border-black/20 bg-[#e3e5e4]/80 px-3 py-2 text-[10px] text-[#48494b]"
             style={{ touchAction: "manipulation" }}
-            title="Double tap"
+            title="C"
           >
-            RAND
+            CHAOS
           </button>
         </div>
 
@@ -713,6 +850,8 @@ export default function Page() {
           seed={seed}
           autoRotate={autoRotate}
           noiseScale={noiseScale}
+          lightPreset={lightPreset}
+          materialMode={materialMode}
           containerRef={sceneContainerRef}
         />
       </div>
@@ -725,18 +864,22 @@ export default function Page() {
             onClick={() => setMenuOpen(false)}
             style={{ touchAction: "manipulation" }}
           />
-          <div className="absolute left-0 top-0 h-full w-[320px] border-r border-black/10 bg-[#e3e5e4]">
+          <div className="absolute left-0 top-0 h-full w-[320px] border-r border-black/10 bg-[#e3e5e4] text-[#48494b] flex flex-col">
             <div className="flex items-center justify-between border-b border-black/10 px-3 py-2">
-              <div className="text-[10px] text-[#48494b]">MENU</div>
+              <div className="text-[10px]">MENU</div>
               <button
-                className="border border-black/20 px-3 py-2 text-[10px] text-[#48494b] hover:bg-black/5"
+                className="border border-black/20 px-3 py-2 text-[10px] hover:bg-black/5"
                 style={{ touchAction: "manipulation" }}
                 onClick={() => setMenuOpen(false)}
               >
                 CLOSE
               </button>
             </div>
-            {Sidebar}
+
+            {/* ✅ scroll container isolated; overscroll does NOT affect canvas */}
+            <div className="flex-1 overflow-y-auto overscroll-contain">
+              {SidebarInner}
+            </div>
           </div>
         </div>
       ) : null}
