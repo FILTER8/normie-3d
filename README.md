@@ -1,53 +1,208 @@
-# Normie 3D
+# 🟦 Normie 3D
 
-A pixel-voxel / 3D explorer for **Normies** — built with Next.js + React Three Fiber.  
-Free to use, fork, remix, and ship.
+**A real-time voxel sculpture explorer for Normies.**\
+Built with Next.js · React Three Fiber · Three.js
 
-**Made by:** 0xfilter  
-- X: https://x.com/0xfilter8
+Transform 2D pixel art into an interactive 3D universe.
 
-## Credits & Sources
+------------------------------------------------------------------------
 
-This project uses the public Normies endpoints + metadata.
+## ✨ What Is This?
 
-- Normies main site: https://www.normies.art/
-- Normies X: https://x.com/normiesART
-- Normies API: https://api.normies.art/
-- Art by SercOne: https://x.com/serc1n
-- API / code credit: https://x.com/YigitDuman
+Normie 3D takes the original 40×40 pixel data from Normies and converts
+it into:
 
-Huge respect to the Normies team, SercOne + Yigit for making the data accessible.
+-   A sculptural voxel statue\
+-   A procedural depth system\
+-   A dynamic "universe" scatter mode\
+-   An audio-reactive 3D experience\
+-   An AR-ready export (USDZ)
 
-## Features
+Designed to feel minimal, smooth, and tactile.
 
-- 3D voxelized Normie view
-- “Universe” starfield scatter mode
-- 8 depth group sliders (procedural grouping)
-- Pixel-styled UI + Press Start 2P font
-- Export PNG with a small stamp
-- Fullscreen + keyboard shortcuts
-- iPhone AR export (USDZ / Quick Look)
+------------------------------------------------------------------------
 
-## Keyboard Shortcuts
+## 🎮 Live Interaction
 
-- **S** → Save PNG
-- **R** → Toggle rotation (on/off)
-- **F** → Fullscreen
-- **B** → Randomize blob size (group region size)
-- **← / →** → Previous / next token
+### 🧊 3D Voxel Sculpture
 
-## Mobile Gestures
+Each pixel becomes a 3D voxel block.
 
-- **Swipe left / right** → Previous / next token
-- **Double tap** → Randomize sliders
-- **Long press** → Reset
+-   8 procedural grouping layers\
+-   Adjustable depth per group\
+-   Adjustable extrusion thickness\
+-   Noise-based blob grouping
 
-## Free to Use / Clone
+------------------------------------------------------------------------
 
-You can clone and run this locally:
+### 🌌 Universe Mode
 
-```bash
+Morph the sculpture into space.
+
+-   Smooth statue ↔ starfield transition\
+-   Procedural spherical distribution\
+-   Adjustable grouping scale\
+-   Fully animated return to statue mode
+
+------------------------------------------------------------------------
+
+### 🎤 Audio Reactive Mode
+
+Turn on the mic and let the sculpture breathe.
+
+-   Real-time microphone input\
+-   Fast expansion, slow cinematic collapse\
+-   Noise gating + smoothing\
+-   Elegant drift back to structure
+
+Optional --- manual control remains available.
+
+------------------------------------------------------------------------
+
+### 🎨 Materials & Lighting
+
+**Material Modes** - Matte\
+- Gloss\
+- Chrome\
+- Glow\
+- Pastel (per-group coloring)
+
+**Lighting Presets** - Studio\
+- Top\
+- Rim\
+- Flat\
+- Drama
+
+Instant switching, no reload.
+
+------------------------------------------------------------------------
+
+### 🔄 Rotation Modes
+
+Cycles through:
+
+OFF → SMOOTH → MIDDLE → FAST → OFF
+
+Fully adjustable speeds in code.
+
+------------------------------------------------------------------------
+
+### 🔁 Smooth Reset System
+
+Reset isn't a snap --- it's a performance.
+
+-   Camera rotates back to front view\
+-   Starfield gathers inward\
+-   Depth collapses to zero\
+-   Extrusion returns to 1 block\
+-   Cubic easing throughout
+
+Triggered by button or long press.
+
+------------------------------------------------------------------------
+
+### 📦 Export
+
+-   PNG export with subtle pixel stamp\
+-   High DPI support\
+-   Mobile-safe rendering\
+-   Fullscreen capture
+
+------------------------------------------------------------------------
+
+### 📱 AR (iPhone)
+
+-   USDZ export endpoint\
+-   Apple Quick Look compatible\
+-   Clean statue mode for AR stability
+
+Launch directly into augmented reality.
+
+------------------------------------------------------------------------
+
+## ⚡ Performance
+
+Built for smoothness:
+
+-   Three.js InstancedMesh rendering\
+-   Zero per-frame geometry allocation\
+-   Proper material disposal\
+-   Stable React hook usage\
+-   Optimized audio loop\
+-   Runs smoothly on mid-range laptops
+
+------------------------------------------------------------------------
+
+## 🖥 Controls
+
+### Keyboard
+
+  Key     Action
+  ------- -----------------------
+  S       Save PNG
+  R       Cycle rotation mode
+  F       Fullscreen
+  B       Random blob size
+  L       Cycle lighting
+  M       Cycle material
+  C       Chaos mode
+  ← / →   Previous / next token
+
+------------------------------------------------------------------------
+
+### Mobile Gestures
+
+-   Swipe left / right → Previous / next token\
+-   Double tap → Randomize depth\
+-   Long press → Smooth reset
+
+------------------------------------------------------------------------
+
+## 🛠 Tech Stack
+
+-   Next.js (App Router)\
+-   React\
+-   React Three Fiber\
+-   Three.js\
+-   Drei\
+-   USDZExporter\
+-   Web Audio API
+
+------------------------------------------------------------------------
+
+## 🧬 Credits
+
+This project uses public Normies endpoints + metadata.
+
+-   Normies: https://www.normies.art\
+-   Normies API: https://api.normies.art\
+-   Normies X: https://x.com/normiesART\
+-   Art by SercOne: https://x.com/serc1n\
+-   API credit: https://x.com/YigitDuman
+
+**Made by 0xfilter**\
+https://x.com/0xfilter8
+
+------------------------------------------------------------------------
+
+## 🚀 Run Locally
+
+``` bash
 git clone https://github.com/FILTER8/normie-3d.git
 cd normie-3d
 npm install
 npm run dev
+```
+
+Open:
+
+http://localhost:3000
+
+------------------------------------------------------------------------
+
+## 📜 License
+
+Free to use.\
+Fork it. Remix it. Build on it.
+
+Attribution appreciated.
