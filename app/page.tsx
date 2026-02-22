@@ -4,6 +4,7 @@
    + ROT button cycles: OFF → SMOOTH → MIDDLE → FAST → OFF
    + Smaller loading text
    + Smooth RESET: pixels gather (starfield→0, z→0, extrude→1) + camera turns to front
+   + NEW: MIC audio reactive starfield (MIC OFF/ON)
    =========================== */
 "use client";
 
@@ -12,7 +13,7 @@ import { fetchPixels, fetchTraits } from "./lib/normiesApi";
 import { NormieScene, type SceneHandle } from "./components/NormieScene";
 import type { MaterialMode } from "./components/NormieVoxels";
 
-const APP_VERSION = "v1.6";
+const APP_VERSION = "v1.8";
 
 type Trait = { trait_type: string; value: string | number | boolean | null };
 type TraitsResponse = { attributes?: Trait[] };
@@ -38,6 +39,20 @@ function lerpArr(a: number[], b: number[], t: number) {
   const out = new Array(Math.max(a.length, b.length));
   for (let i = 0; i < out.length; i++) out[i] = lerp(a[i] ?? 0, b[i] ?? 0, t);
   return out;
+}
+
+// 🎤 audio helpers
+function rmsFromTimeDomain(data: Uint8Array) {
+  let sum = 0;
+  for (let i = 0; i < data.length; i++) {
+    const v = (data[i] - 128) / 128;
+    sum += v * v;
+  }
+  return Math.sqrt(sum / data.length);
+}
+
+function smooth(prev: number, next: number, a: number) {
+  return prev * a + next * (1 - a);
 }
 
 function PixelSlider({
@@ -235,6 +250,100 @@ export default function Page() {
   const lightName = LIGHT_NAMES[lightPreset % 5];
   const matName = MAT_NAMES[(materialMode % 5) as 0 | 1 | 2 | 3 | 4];
 
+  // 🎤 mic-driven starfield
+  const [micOn, setMicOn] = useState(false);
+  const audioCtxRef = useRef<AudioContext | null>(null);
+  const analyserRef = useRef<AnalyserNode | null>(null);
+  const micStreamRef = useRef<MediaStream | null>(null);
+  const rafAudioRef = useRef<number | null>(null);
+  const starSmoothedRef = useRef(0);
+
+  const stopMic = () => {
+    if (rafAudioRef.current !== null) {
+      cancelAnimationFrame(rafAudioRef.current);
+      rafAudioRef.current = null;
+    }
+
+    analyserRef.current = null;
+
+    if (micStreamRef.current) {
+      for (const t of micStreamRef.current.getTracks()) t.stop();
+      micStreamRef.current = null;
+    }
+
+    if (audioCtxRef.current) {
+      void audioCtxRef.current.close().catch(() => {});
+      audioCtxRef.current = null;
+    }
+
+    setMicOn(false);
+  };
+
+  const startMic = async () => {
+    if (micOn) return;
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        },
+      });
+
+      const ctx = new AudioContext();
+      const source = ctx.createMediaStreamSource(stream);
+
+      const analyser = ctx.createAnalyser();
+      analyser.fftSize = 1024;
+      analyser.smoothingTimeConstant = 0.85;
+
+      source.connect(analyser);
+
+      micStreamRef.current = stream;
+      audioCtxRef.current = ctx;
+      analyserRef.current = analyser;
+
+      starSmoothedRef.current = starfield; // start from current value
+      setMicOn(true);
+
+      const data = new Uint8Array(analyser.fftSize);
+
+      // ✅ tune these:
+      const NOISE_FLOOR = 0.02;
+      const GAIN = 2.2;
+      const SMOOTHING = 0.92;
+
+      const tick = () => {
+        const an = analyserRef.current;
+        if (!an) return;
+
+        an.getByteTimeDomainData(data);
+        const raw = rmsFromTimeDomain(data);
+
+        const boosted = Math.max(0, raw - NOISE_FLOOR) * GAIN;
+        const target = clamp(boosted, 0, 1);
+
+        const prev = starSmoothedRef.current;
+        const next = smooth(prev, target, SMOOTHING);
+        starSmoothedRef.current = next;
+
+        setStarfield(next);
+        rafAudioRef.current = requestAnimationFrame(tick);
+      };
+
+      rafAudioRef.current = requestAnimationFrame(tick);
+    } catch (e) {
+      console.error(e);
+      stopMic();
+    }
+  };
+
+  useEffect(() => {
+    return () => stopMic();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // ✅ Lock body scroll when mobile menu is open
   useEffect(() => {
     if (!menuOpen) return;
@@ -315,7 +424,9 @@ export default function Page() {
 
   // ✅ Smooth RESET: camera -> front + gather pixels nicely
   const reset = () => {
-    // static targets
+    // if mic is driving starfield, stop it so reset can animate cleanly
+    if (micOn) stopMic();
+
     const z0 = Array.from({ length: 8 }, () => 0);
     const ex0 = Array.from({ length: 8 }, () => 1);
 
@@ -323,12 +434,10 @@ export default function Page() {
     const exFrom = extrude.slice();
     const starFrom = starfield;
 
-    // immediate reset for "non-animated" toggles
     setNoiseScale(6);
     setLightPreset(0);
     setMaterialMode(0);
 
-    // camera to front (requires NormieScene handle update below)
     sceneRef.current?.resetFront?.(650);
 
     const start = performance.now();
@@ -443,7 +552,18 @@ export default function Page() {
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [id, isExporting, menuOpen, sidebarOpen, lightPreset, materialMode, rotMode, starfield, z, extrude]);
+  }, [
+    id,
+    isExporting,
+    menuOpen,
+    sidebarOpen,
+    lightPreset,
+    materialMode,
+    rotMode,
+    starfield,
+    z,
+    extrude,
+  ]);
 
   // ---- Swipe left/right + double tap randomize
   useEffect(() => {
@@ -667,6 +787,16 @@ export default function Page() {
           ROT: {rotLabel}
         </button>
 
+        {/* 🎤 MIC toggle */}
+        <button
+          onClick={() => (micOn ? stopMic() : void startMic())}
+          className="border border-black/20 px-3 py-2 text-[10px] hover:bg-black/5"
+          style={{ touchAction: "manipulation" }}
+          title="Audio reactive starfield"
+        >
+          {micOn ? "MIC: ON" : "MIC: OFF"}
+        </button>
+
         <button
           onClick={() => {
             const el = sceneContainerRef.current;
@@ -751,11 +881,16 @@ export default function Page() {
         <PixelSlider
           label="STARFIELD"
           value={starfield}
-          onChange={setStarfield}
+          onChange={(v) => {
+            if (!micOn) setStarfield(v);
+          }}
           min={0}
           max={1}
           step={0.01}
         />
+        {micOn ? (
+          <div className="mt-2 text-[9px] opacity-60">mic controls starfield…</div>
+        ) : null}
       </div>
 
       <div className="mt-8">
