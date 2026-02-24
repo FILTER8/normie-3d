@@ -5,9 +5,12 @@
 // - Exposes getLevel01() (0..1) to drive starfield
 // - ✅ Adds setIntensity(0..1) to make output + meter more/less aggressive
 //
-// ✅ LINT CLEAN:
-// - no `any`
-// - no unused `reverbMix` (we now use Expression to gently shape the delay filter / feedback)
+// ✅ iOS FIX:
+// - PannerNode positionX/Y/Z are not supported reliably on iOS Safari.
+// - Add PannerNodeCompat + fallback to setPosition(x,y,z).
+//
+// ✅ Resume robustness:
+// - resume if ctx.state !== "running" (iOS can be weird).
 
 export type Trait = { trait_type: string; value: unknown };
 export type TraitsResponse = { attributes?: Trait[] };
@@ -38,6 +41,14 @@ type AudioListenerCompat = AudioListener &
       uy: number,
       uz: number
     ) => void;
+  }>;
+
+type PannerNodeCompat = PannerNode &
+  Partial<{
+    positionX: AudioParam;
+    positionY: AudioParam;
+    positionZ: AudioParam;
+    setPosition: (x: number, y: number, z: number) => void;
   }>;
 
 // ─────────────────────────────────────────────
@@ -226,7 +237,8 @@ function getScaleNote(degree: number) {
 
 function makeDailySeed(id: number) {
   const d = new Date();
-  const dateSeed = d.getFullYear() * 10000 + (d.getMonth() + 1) * 100 + d.getDate();
+  const dateSeed =
+    d.getFullYear() * 10000 + (d.getMonth() + 1) * 100 + d.getDate();
   return dateSeed * 10000 + id;
 }
 
@@ -246,6 +258,7 @@ function ensureAudio() {
   panner = ctx.createPanner();
   panner.panningModel = "HRTF";
   panner.distanceModel = "inverse";
+
   // tuned for loudness vs zoom
   panner.refDistance = 3;
   panner.maxDistance = 200;
@@ -288,7 +301,8 @@ function ensureAudio() {
 async function resumeIfNeeded() {
   ensureAudio();
   if (!ctx) return;
-  if (ctx.state === "suspended") await ctx.resume();
+  // ✅ robust: resume whenever not running (iOS Safari)
+  if (ctx.state !== "running") await ctx.resume();
 }
 
 function applyTraits(attrs: Trait[]) {
@@ -344,7 +358,13 @@ function applyTraits(attrs: Trait[]) {
   }
 }
 
-function playTone(freq: number, time: number, dur: number, vel: number, type: OscillatorType) {
+function playTone(
+  freq: number,
+  time: number,
+  dur: number,
+  vel: number,
+  type: OscillatorType
+) {
   if (!ctx || !outBus) return;
 
   const g = ctx.createGain();
@@ -414,7 +434,8 @@ function scheduleNotes() {
 
     // Melody
     if (density > 0.05 && r < (0.6 + density * 0.3) * densityBoost) {
-      const rangeDeg = genderRange.low + density * (genderRange.high - genderRange.low);
+      const rangeDeg =
+        genderRange.low + density * (genderRange.high - genderRange.low);
       const degree = Math.floor(rangeDeg) + arpDeg;
       const midi = getScaleNote(degree);
       const f = midiToFreq(midi);
@@ -436,8 +457,18 @@ function scheduleNotes() {
     if (seqStep % 8 === 0) {
       const padRoot = getScaleNote(Math.floor(rng() * 4) + genderRange.low);
       const padDur = (tempoMs / 1000) * 8;
-      playPad(midiToFreq(padRoot), nextNoteTime, padDur, (0.4 + density * 0.3) * velBoost);
-      playPad(midiToFreq(getScaleNote(2 + arpDeg)), nextNoteTime, padDur, 0.2 * velBoost);
+      playPad(
+        midiToFreq(padRoot),
+        nextNoteTime,
+        padDur,
+        (0.4 + density * 0.3) * velBoost
+      );
+      playPad(
+        midiToFreq(getScaleNote(2 + arpDeg)),
+        nextNoteTime,
+        padDur,
+        0.2 * velBoost
+      );
     }
 
     // Bass
@@ -523,12 +554,22 @@ export const NormieAmbient3d = {
     applyTraits(traits);
   },
 
+  // ✅ iOS-safe panner positioning (positionX/Y/Z or setPosition fallback)
   setSourcePosition(pos: Vec3) {
     if (!ctx || !panner) return;
     const t = ctx.currentTime;
-    panner.positionX.setValueAtTime(pos.x, t);
-    panner.positionY.setValueAtTime(pos.y, t);
-    panner.positionZ.setValueAtTime(pos.z, t);
+    const P = panner as PannerNodeCompat;
+
+    if (P.positionX && P.positionY && P.positionZ) {
+      P.positionX.setValueAtTime(pos.x, t);
+      P.positionY.setValueAtTime(pos.y, t);
+      P.positionZ.setValueAtTime(pos.z, t);
+      return;
+    }
+
+    if (typeof P.setPosition === "function") {
+      P.setPosition(pos.x, pos.y, pos.z);
+    }
   },
 
   setListenerPosition(pos: Vec3) {
@@ -553,14 +594,7 @@ export const NormieAmbient3d = {
     const t = ctx.currentTime;
     const L = ctx.listener as AudioListenerCompat;
 
-    if (
-      L.forwardX &&
-      L.forwardY &&
-      L.forwardZ &&
-      L.upX &&
-      L.upY &&
-      L.upZ
-    ) {
+    if (L.forwardX && L.forwardY && L.forwardZ && L.upX && L.upY && L.upZ) {
       L.forwardX.setValueAtTime(forward.x, t);
       L.forwardY.setValueAtTime(forward.y, t);
       L.forwardZ.setValueAtTime(forward.z, t);
@@ -571,14 +605,7 @@ export const NormieAmbient3d = {
     }
 
     if (typeof L.setOrientation === "function") {
-      L.setOrientation(
-        forward.x,
-        forward.y,
-        forward.z,
-        up.x,
-        up.y,
-        up.z
-      );
+      L.setOrientation(forward.x, forward.y, forward.z, up.x, up.y, up.z);
     }
   },
 

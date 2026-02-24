@@ -119,7 +119,7 @@ function AudioLevelBridge({
 
     let raf = 0;
 
-    // ✅ Map INTENSITY to: more strength + less smoothing (more punch)
+    // Map INTENSITY to: more strength + less smoothing (more punch)
     const strength = clamp(baseStrength * lerp(0.65, 2.0, intensity), 0, 2.5);
     const smoothing = clamp(
       baseSmoothing + lerp(0.06, -0.1, intensity),
@@ -133,8 +133,8 @@ function AudioLevelBridge({
       // scale by intensity strength
       const target = clamp(raw * strength, 0, 1);
 
-      // ✅ Gate tiny values so "silence" actually collapses visuals
-      const GATE = 0.015; // tweak 0.01–0.03
+      // Gate tiny values so "silence" actually collapses visuals
+      const GATE = 0.015;
       const gated = target < GATE ? 0 : target;
 
       const prev = smoothRef.current;
@@ -153,18 +153,21 @@ function AudioLevelBridge({
 }
 
 /**
- * ✅ NEW: AudioSpatialBridge
- * Makes camera distance/zoom affect perceived loudness using PannerNode distance attenuation.
+ * AudioSpatialBridge
  * - listener follows camera
  * - source stays at (0,0,0) (voxels center)
+ * NOTE: this only matters if the audio engine routes through a PannerNode.
  */
-function AudioSpatialBridge() {
+function AudioSpatialBridge({ enabled }: { enabled: boolean }) {
   const { camera } = useThree();
 
   const fwd = useMemo(() => new THREE.Vector3(), []);
   const up = useMemo(() => new THREE.Vector3(), []);
 
   useFrame(() => {
+    if (!enabled) return;
+    if (!NormieAmbient3d.isPlaying()) return;
+
     // listener position = camera position
     NormieAmbient3d.setListenerPosition({
       x: camera.position.x,
@@ -210,15 +213,14 @@ export const NormieAudioScene = forwardRef<
     lightPreset: number;
     materialMode: MaterialMode;
 
-    // ✅ audio knobs
-    audioReactiveStarfield?: boolean; // default false unless audio on in page
+    // audio knobs
+    audioReactiveStarfield?: boolean;
     intensity?: number; // 0..1
-    audioStrengthBase?: number; // from traits (or constant)
-    audioSmoothingBase?: number; // from traits (or constant)
+    audioStrengthBase?: number;
+    audioSmoothingBase?: number;
 
     /**
-     * ✅ NEW: where the starfield sits when silent (pixels come together).
-     * If you want "nearly together" at silence, keep this small (0.02–0.08).
+     * where the starfield sits when silent (pixels come together).
      */
     restStarfield?: number;
 
@@ -242,7 +244,7 @@ export const NormieAudioScene = forwardRef<
     audioStrengthBase = 0.35,
     audioSmoothingBase = 0.9,
 
-    restStarfield = 0.00,
+    restStarfield = 0.0,
     resetCameraZ = 4.75,
   },
   ref
@@ -261,13 +263,8 @@ export const NormieAudioScene = forwardRef<
   // audio drive (0..1)
   const [audioDrive, setAudioDrive] = useState(0);
 
-  /**
-   * ✅ KEY CHANGE:
-   * Silence should collapse (restStarfield).
-   * Audio should OPEN UP toward starfield (trait max spread).
-   *
-   * effectiveStarfield = lerp(rest, max, shapedDrive)
-   */
+  // Silence should collapse (restStarfield).
+  // Audio should OPEN UP toward starfield (trait max spread).
   const maxStarfield = clamp(starfield, 0, 1);
   const rest = clamp(restStarfield, 0, 1);
 
@@ -341,8 +338,8 @@ export const NormieAudioScene = forwardRef<
         <ExportBridge onReady={(fn) => (exporterRef.current = fn)} />
         <InvalidateBridge onReady={(fn) => (invalidateRef.current = fn)} />
 
-        {/* ✅ NEW: camera -> listener mapping so zoom changes loudness */}
-        {audioReactiveStarfield ? <AudioSpatialBridge /> : null}
+        {/* camera -> listener mapping so zoom changes loudness */}
+        <AudioSpatialBridge enabled={!!pixels && audioReactiveStarfield} />
 
         <AudioLevelBridge
           enabled={!!pixels && audioReactiveStarfield}

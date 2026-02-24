@@ -420,7 +420,7 @@ export default function Page() {
     <div className="h-full overflow-y-auto overscroll-contain p-4">
       <div className="flex items-start justify-between gap-2">
         <div>
-          <h2 className="text-sm leading-tight">NORMIES AMBIENT 3D {APP_VERSION}</h2>
+          <h2 className="text-sm leading-tight">AMBIENT 3D {APP_VERSION}</h2>
 
           <div className="mt-2 text-[10px] opacity-70">
             Audio by{" "}
