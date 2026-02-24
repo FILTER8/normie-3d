@@ -283,16 +283,7 @@ function DesktopAmbient() {
     };
   }, []);
 
-  useEffect(() => {
-    if (!menuOpen) return;
-    const prev = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    return () => {
-      document.body.style.overflow = prev;
-    };
-  }, [menuOpen]);
-
- useEffect(() => {
+useEffect(() => {
   // clear timers
   if (autoIdTimerRef.current) {
     window.clearTimeout(autoIdTimerRef.current);
@@ -305,33 +296,29 @@ function DesktopAmbient() {
 
   if (!autoIdOn) {
     nextAutoAtRef.current = null;
-    setAutoIn(0);
+    queueMicrotask(() => setAutoIn(0));
     return;
   }
 
-  const scheduleNext = () => {
-    // single source of truth
+  const armNext = () => {
     nextAutoAtRef.current = Date.now() + AUTO_ID_MS;
     setAutoIn(Math.ceil(AUTO_ID_MS / 1000));
 
-    // ✅ self-correcting timeout (no drift accumulation)
     autoIdTimerRef.current = window.setTimeout(() => {
-      setIdInput(randomIdString());
-      scheduleNext();
+      newRandomId();
+      armNext(); // schedule next cycle from *actual* fire time
     }, AUTO_ID_MS);
   };
 
-  scheduleNext();
+  armNext();
 
-  // countdown display (reads nextAutoAtRef)
+  // countdown reads the single source of truth: nextAutoAtRef
   autoCountdownTimerRef.current = window.setInterval(() => {
     const nextAt = nextAutoAtRef.current;
     if (!nextAt) return;
-
-    const msLeft = nextAt - Date.now();
-    const sLeft = Math.max(0, Math.ceil(msLeft / 1000));
-    setAutoIn(sLeft);
-  }, 200);
+    const s = Math.max(0, Math.ceil((nextAt - Date.now()) / 1000));
+    setAutoIn(s);
+  }, 250);
 
   return () => {
     if (autoIdTimerRef.current) {
@@ -342,9 +329,8 @@ function DesktopAmbient() {
       window.clearInterval(autoCountdownTimerRef.current);
       autoCountdownTimerRef.current = null;
     }
-    nextAutoAtRef.current = null;
   };
-}, [autoIdOn]);
+}, [autoIdOn, newRandomId]);
 
   useEffect(() => {
     let cancelled = false;
