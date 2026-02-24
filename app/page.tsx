@@ -52,7 +52,7 @@ export default function Page() {
                 Ambient
               </a>
               <p className="text-[10px] sm:text-[11px] opacity-60">
-                Audio environment by{" "}
+                Desktop only. Audio environment by{" "}
                 <a
                   href="https://x.com/yasuna_ide"
                   target="_blank"

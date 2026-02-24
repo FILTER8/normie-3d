@@ -1,8 +1,7 @@
 /* ===========================
    app/ambient/page.tsx
    Trait-driven studio + audio-reactive starfield
-   UI: AUDIO ON/OFF + VOLUME + INTENSITY + AUTO ID (40s) + COUNTDOWN
-   Everything else derives from traits.
+   Desktop-only gate (mobile shows clean screen)
    =========================== */
 "use client";
 
@@ -19,6 +18,22 @@ import type { MaterialMode } from "../components/NormieVoxels";
 
 const APP_VERSION = "v2.0";
 const AUTO_ID_MS = 40_000;
+
+function isMobileUA() {
+  if (typeof navigator === "undefined") return false;
+  const ua = navigator.userAgent || "";
+
+  // iOS + iPadOS (incl. iPadOS reporting as Mac)
+  const iOSUA = /iPad|iPhone|iPod/i.test(ua);
+  const iPadOS =
+    navigator.platform === "MacIntel" && (navigator.maxTouchPoints ?? 0) > 1;
+
+  // General mobile
+  const mobile =
+    /Android|webOS|BlackBerry|IEMobile|Opera Mini/i.test(ua) || iOSUA || iPadOS;
+
+  return mobile;
+}
 
 function clampId(n: number) {
   if (Number.isNaN(n)) return 0;
@@ -152,7 +167,73 @@ function randomIdString() {
   return String(Math.floor(Math.random() * 10000));
 }
 
+function DesktopOnlyScreen() {
+  return (
+    <main className="min-h-screen bg-[#e3e5e4] text-[#48494b] flex items-center justify-center p-6">
+      <div className="w-full max-w-[420px] text-center">
+        <div className="text-[10px] opacity-70">NORMIES</div>
+
+        <h1 className="mt-2 text-xl tracking-tight">AMBIENT 3D</h1>
+
+        <p className="mt-4 text-xs opacity-75 leading-relaxed">
+          Ambient mode is currently available on desktop only.
+        </p>
+
+        <div className="mt-8 flex items-center justify-center gap-3">
+          <a
+            href="/"
+            className="inline-block border border-black/20 bg-white/20 px-5 py-3 text-xs hover:bg-black/5 transition"
+          >
+            BACK
+          </a>
+
+          <a
+            href="/sculpt"
+            className="inline-block border border-black/20 bg-white/20 px-5 py-3 text-xs hover:bg-black/5 transition"
+          >
+            SCULPT
+          </a>
+        </div>
+
+        <div className="mt-6 text-[10px] opacity-60">
+          Tip: open this page on a laptop/desktop for audio.
+        </div>
+      </div>
+    </main>
+  );
+}
+
 export default function Page() {
+  // ── Desktop-only gate (client-side, no server headers in this file)
+  const [isMobile, setIsMobile] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    setIsMobile(isMobileUA());
+  }, []);
+
+  // If mobile, stop anything that might already be running (extra safety)
+  useEffect(() => {
+    if (isMobile) {
+      NormieAmbient3d.stop();
+    }
+  }, [isMobile]);
+
+  // While we detect UA, keep it neutral (avoids flicker)
+  if (isMobile === null) {
+    return (
+      <div className="min-h-screen bg-[#e3e5e4] text-[#48494b] flex items-center justify-center">
+        <div className="text-[10px] opacity-60">loading…</div>
+      </div>
+    );
+  }
+
+  // Mobile: show clean screen only
+  if (isMobile) {
+    return <DesktopOnlyScreen />;
+  }
+
+  // ─────────────────────────────────────────────
+  // Desktop: full ambient experience below
   const sceneRef = useRef<SceneHandle | null>(null);
   const fullscreenTargetRef = useRef<HTMLDivElement | null>(null);
   const sceneContainerRef = useRef<HTMLDivElement | null>(null);
@@ -160,7 +241,6 @@ export default function Page() {
   const [menuOpen, setMenuOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
 
-  // ✅ No “setState in effect” — initialize random id here
   const [idInput, setIdInput] = useState<string>(() => randomIdString());
   const id = useMemo(() => clampId(parseInt(idInput, 10)), [idInput]);
 
@@ -171,14 +251,12 @@ export default function Page() {
     error: "",
   });
 
-  // ✅ knobs
   const [audioOn, setAudioOn] = useState(false);
   const [volume, setVolume] = useState(0.75);
-  const [intensity, setIntensity] = useState(1.0); // 0..1
+  const [intensity, setIntensity] = useState(1.0);
 
   const [isFullscreen, setIsFullscreen] = useState(false);
 
-  // ✅ AUTO ID + countdown
   const [autoIdOn, setAutoIdOn] = useState(false);
   const autoIdTimerRef = useRef<number | null>(null);
   const autoCountdownTimerRef = useRef<number | null>(null);
@@ -191,13 +269,11 @@ export default function Page() {
     setIdInput(randomIdString());
   }, []);
 
-  // full-screen tracking
   useEffect(() => {
     const doc = document as FullscreenDoc;
 
     const onChange = () => {
       const fs = !!getFsElement(doc);
-      // setState inside event callback is allowed
       setIsFullscreen(fs);
       if (fs) {
         setMenuOpen(false);
@@ -207,7 +283,6 @@ export default function Page() {
 
     document.addEventListener("fullscreenchange", onChange);
 
-    // ✅ prefer-as-const
     const webkitEventName = "webkitfullscreenchange" as const;
     document.addEventListener(webkitEventName, onChange as EventListener);
 
@@ -218,7 +293,6 @@ export default function Page() {
     };
   }, []);
 
-  // lock body scroll if mobile menu open
   useEffect(() => {
     if (!menuOpen) return;
     const prev = document.body.style.overflow;
@@ -228,9 +302,7 @@ export default function Page() {
     };
   }, [menuOpen]);
 
-  // ✅ AUTO ID interval (40s) + countdown
   useEffect(() => {
-    // clear timers
     if (autoIdTimerRef.current) {
       window.clearInterval(autoIdTimerRef.current);
       autoIdTimerRef.current = null;
@@ -242,15 +314,11 @@ export default function Page() {
 
     if (!autoIdOn) {
       nextAutoAtRef.current = null;
-
-      // ❗ no setState sync in effect — push to microtask
       queueMicrotask(() => setAutoIn(0));
       return;
     }
 
     nextAutoAtRef.current = Date.now() + AUTO_ID_MS;
-
-    // same: not synchronous in effect body
     queueMicrotask(() => setAutoIn(Math.ceil(AUTO_ID_MS / 1000)));
 
     autoIdTimerRef.current = window.setInterval(() => {
@@ -278,11 +346,9 @@ export default function Page() {
     };
   }, [autoIdOn, newRandomId]);
 
-  // fetch token data
   useEffect(() => {
     let cancelled = false;
 
-    // ❗ no sync setState in effect — do it async
     queueMicrotask(() => setStatus({ loading: true, error: "" }));
 
     const t = window.setTimeout(async () => {
@@ -305,12 +371,10 @@ export default function Page() {
     };
   }, [id]);
 
-  // feed audio engine whenever data changes
   useEffect(() => {
     NormieAmbient3d.setData({ id, pixels, traits });
   }, [id, pixels, traits]);
 
-  // keep audio volume + intensity in sync
   useEffect(() => {
     NormieAmbient3d.setVolume(volume);
   }, [volume]);
@@ -319,7 +383,6 @@ export default function Page() {
     NormieAmbient3d.setIntensity(intensity);
   }, [intensity]);
 
-  // restart audio when token changes (if ON)
   useEffect(() => {
     if (!audioOn) return;
     if (!pixels) return;
@@ -333,11 +396,9 @@ export default function Page() {
     })();
   }, [audioOn, id, pixels, traits, volume, intensity]);
 
-  // stop audio if pixels disappear (no sync setState in effect)
   useEffect(() => {
     if (!pixels && audioOn) {
       NormieAmbient3d.stop();
-      // async state update to satisfy your rule
       queueMicrotask(() => setAudioOn(false));
     }
   }, [pixels, audioOn]);
@@ -382,7 +443,6 @@ export default function Page() {
     }
   }, []);
 
-  // keyboard
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       if (isTypingTarget(e.target)) return;
@@ -458,7 +518,9 @@ export default function Page() {
         </button>
       </div>
 
-      <label className="mt-4 block text-[10px] opacity-80">TOKEN ID (0–9999)</label>
+      <label className="mt-4 block text-[10px] opacity-80">
+        TOKEN ID (0–9999)
+      </label>
       <div className="mt-2 flex gap-2">
         <input
           value={idInput}
@@ -487,7 +549,6 @@ export default function Page() {
         </button>
       </div>
 
-      {/* AUTO ID controls + countdown */}
       <div className="mt-2 flex gap-2">
         <button
           onClick={() => setAutoIdOn((v) => !v)}
@@ -514,7 +575,9 @@ export default function Page() {
 
       <div className="mt-3 text-[9px] opacity-70">
         {status.loading ? <div>loading…</div> : null}
-        {status.error ? <div className="text-red-700 opacity-100">{status.error}</div> : null}
+        {status.error ? (
+          <div className="text-red-700 opacity-100">{status.error}</div>
+        ) : null}
       </div>
 
       <div className="mt-5">
@@ -569,7 +632,8 @@ export default function Page() {
           <ul className="mt-2 space-y-1 text-[10px]">
             {traitList.map((a, i) => (
               <li key={`${a.trait_type}-${i}`}>
-                <span className="opacity-70">{a.trait_type}:</span> {String(a.value)}
+                <span className="opacity-70">{a.trait_type}:</span>{" "}
+                {String(a.value)}
               </li>
             ))}
           </ul>
@@ -579,51 +643,15 @@ export default function Page() {
   );
 
   return (
-    <div className="fixed inset-0 bg-[#e3e5e4] overflow-hidden" ref={fullscreenTargetRef}>
-      {/* Fullscreen subtle countdown (upper-left) */}
+    <div
+      className="fixed inset-0 bg-[#e3e5e4] overflow-hidden"
+      ref={fullscreenTargetRef}
+    >
       {isFullscreen && autoIdOn ? (
         <div className="absolute left-3 top-3 z-50 pointer-events-none text-[10px] text-[#48494b] opacity-50">
           AUTO {autoIn}s
         </div>
       ) : null}
-
-      {/* Mobile top bar */}
-      <div className="md:hidden flex items-center justify-between border-b border-black/10 px-3 py-2 gap-2">
-        <div className="text-[10px] text-[#48494b] whitespace-nowrap">
-          NORMIES AMBIENT 3D {APP_VERSION}
-        </div>
-        <div className="ml-auto flex items-center gap-2">
-          <button
-            className="border border-black/20 px-3 py-2 text-[10px] text-[#48494b] hover:bg-black/5 whitespace-nowrap disabled:opacity-60"
-            style={{ touchAction: "manipulation" }}
-            onClick={() => void toggleAudio()}
-            disabled={!pixels}
-            title="A"
-            type="button"
-          >
-            AUDIO
-          </button>
-
-          <button
-            className="border border-black/20 px-3 py-2 text-[10px] text-[#48494b] hover:bg-black/5 whitespace-nowrap"
-            style={{ touchAction: "manipulation" }}
-            onClick={() => setAutoIdOn((v) => !v)}
-            title="Auto ID (40s)"
-            type="button"
-          >
-            {autoIdOn ? `AUTO: ${autoIn}s` : "AUTO: OFF"}
-          </button>
-
-          <button
-            className="border border-black/20 px-3 py-2 text-[10px] text-[#48494b] hover:bg-black/5 whitespace-nowrap"
-            style={{ touchAction: "manipulation" }}
-            onClick={() => setMenuOpen(true)}
-            type="button"
-          >
-            MENU
-          </button>
-        </div>
-      </div>
 
       {/* Desktop layout */}
       <div className="hidden md:flex h-full">
@@ -669,90 +697,6 @@ export default function Page() {
           />
         </main>
       </div>
-
-      {/* Mobile scene */}
-      <div
-        className="md:hidden relative bg-[#e3e5e4] cursor-grab active:cursor-grabbing"
-        style={{ height: "calc(100% - 41px)", touchAction: "none" }}
-        ref={sceneContainerRef}
-      >
-        <div className="absolute left-3 top-3 z-10 flex items-center gap-2">
-          <button
-            onClick={prevId}
-            className="border border-black/20 bg-[#e3e5e4]/80 px-3 py-2 text-[10px] text-[#48494b]"
-            style={{ touchAction: "manipulation" }}
-            type="button"
-          >
-            ◀
-          </button>
-          <div className="border border-black/20 bg-[#e3e5e4]/80 px-3 py-2 text-[10px] text-[#48494b]">
-            #{id}
-          </div>
-          <button
-            onClick={nextId}
-            className="border border-black/20 bg-[#e3e5e4]/80 px-3 py-2 text-[10px] text-[#48494b]"
-            style={{ touchAction: "manipulation" }}
-            type="button"
-          >
-            ▶
-          </button>
-        </div>
-
-        <div className="absolute right-3 top-3 z-10 flex items-center gap-2">
-          <button
-            onClick={() => void toggleFs()}
-            className="border border-black/20 bg-[#e3e5e4]/80 px-3 py-2 text-[10px] text-[#48494b]"
-            style={{ touchAction: "manipulation" }}
-            type="button"
-          >
-            {isFullscreen ? "EXIT" : "FULL"}
-          </button>
-        </div>
-
-        <NormieAudioScene
-          ref={sceneRef}
-          pixels={pixels}
-          z={Array.from({ length: 8 }, () => 0)}
-          extrude={Array.from({ length: 8 }, () => 1)}
-          starfield={studio.baseStarfield}
-          seed={id}
-          autoRotate={studio.autoRotate}
-          autoRotateSpeed={studio.autoRotateSpeed}
-          noiseScale={studio.noiseScale}
-          lightPreset={studio.lightPreset}
-          materialMode={studio.materialMode as MaterialMode}
-          audioReactiveStarfield={audioOn}
-          intensity={intensity}
-          audioStrengthBase={studio.audioStarStrengthBase}
-          audioSmoothingBase={studio.audioSmoothingBase}
-          restStarfield={0.0}
-        />
-      </div>
-
-      {/* Mobile drawer */}
-      {menuOpen ? (
-        <div className="md:hidden fixed inset-0 z-50">
-          <div
-            className="absolute inset-0 bg-black/30"
-            onClick={() => setMenuOpen(false)}
-            style={{ touchAction: "manipulation" }}
-          />
-          <div className="absolute left-0 top-0 h-full w-[320px] border-r border-black/10 bg-[#e3e5e4] text-[#48494b] flex flex-col">
-            <div className="flex items-center justify-between border-b border-black/10 px-3 py-2">
-              <div className="text-[10px]">MENU</div>
-              <button
-                className="border border-black/20 px-3 py-2 text-[10px] hover:bg-black/5"
-                style={{ touchAction: "manipulation" }}
-                onClick={() => setMenuOpen(false)}
-                type="button"
-              >
-                CLOSE
-              </button>
-            </div>
-            <div className="flex-1 overflow-y-auto overscroll-contain">{SidebarInner}</div>
-          </div>
-        </div>
-      ) : null}
 
       <style jsx global>{`
         canvas {
