@@ -292,49 +292,59 @@ function DesktopAmbient() {
     };
   }, [menuOpen]);
 
-  useEffect(() => {
+ useEffect(() => {
+  // clear timers
+  if (autoIdTimerRef.current) {
+    window.clearTimeout(autoIdTimerRef.current);
+    autoIdTimerRef.current = null;
+  }
+  if (autoCountdownTimerRef.current) {
+    window.clearInterval(autoCountdownTimerRef.current);
+    autoCountdownTimerRef.current = null;
+  }
+
+  if (!autoIdOn) {
+    nextAutoAtRef.current = null;
+    setAutoIn(0);
+    return;
+  }
+
+  const scheduleNext = () => {
+    // single source of truth
+    nextAutoAtRef.current = Date.now() + AUTO_ID_MS;
+    setAutoIn(Math.ceil(AUTO_ID_MS / 1000));
+
+    // ✅ self-correcting timeout (no drift accumulation)
+    autoIdTimerRef.current = window.setTimeout(() => {
+      setIdInput(randomIdString());
+      scheduleNext();
+    }, AUTO_ID_MS);
+  };
+
+  scheduleNext();
+
+  // countdown display (reads nextAutoAtRef)
+  autoCountdownTimerRef.current = window.setInterval(() => {
+    const nextAt = nextAutoAtRef.current;
+    if (!nextAt) return;
+
+    const msLeft = nextAt - Date.now();
+    const sLeft = Math.max(0, Math.ceil(msLeft / 1000));
+    setAutoIn(sLeft);
+  }, 200);
+
+  return () => {
     if (autoIdTimerRef.current) {
-      window.clearInterval(autoIdTimerRef.current);
+      window.clearTimeout(autoIdTimerRef.current);
       autoIdTimerRef.current = null;
     }
     if (autoCountdownTimerRef.current) {
       window.clearInterval(autoCountdownTimerRef.current);
       autoCountdownTimerRef.current = null;
     }
-
-    if (!autoIdOn) {
-      nextAutoAtRef.current = null;
-      queueMicrotask(() => setAutoIn(0));
-      return;
-    }
-
-    nextAutoAtRef.current = Date.now() + AUTO_ID_MS;
-    queueMicrotask(() => setAutoIn(Math.ceil(AUTO_ID_MS / 1000)));
-
-    autoIdTimerRef.current = window.setInterval(() => {
-      newRandomId();
-      nextAutoAtRef.current = Date.now() + AUTO_ID_MS;
-      setAutoIn(Math.ceil(AUTO_ID_MS / 1000));
-    }, AUTO_ID_MS);
-
-    autoCountdownTimerRef.current = window.setInterval(() => {
-      const nextAt = nextAutoAtRef.current;
-      if (!nextAt) return;
-      const s = Math.max(0, Math.ceil((nextAt - Date.now()) / 1000));
-      setAutoIn(s);
-    }, 250);
-
-    return () => {
-      if (autoIdTimerRef.current) {
-        window.clearInterval(autoIdTimerRef.current);
-        autoIdTimerRef.current = null;
-      }
-      if (autoCountdownTimerRef.current) {
-        window.clearInterval(autoCountdownTimerRef.current);
-        autoCountdownTimerRef.current = null;
-      }
-    };
-  }, [autoIdOn, newRandomId]);
+    nextAutoAtRef.current = null;
+  };
+}, [autoIdOn]);
 
   useEffect(() => {
     let cancelled = false;
