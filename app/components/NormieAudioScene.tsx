@@ -1,10 +1,4 @@
-/* ===========================
-   app/components/NormieScene.tsx
-   + NormieAmbient3d bridge:
-     - listener follows camera
-     - source at normie origin
-     - starfield driven by audio meter (base + level*strength)
-   =========================== */
+// app/components/NormieAudioScene.tsx
 "use client";
 
 import {
@@ -33,6 +27,10 @@ function easeInOutCubic(t: number) {
 
 function clamp(n: number, a: number, b: number) {
   return Math.max(a, Math.min(b, n));
+}
+
+function lerp(a: number, b: number, t: number) {
+  return a + (b - a) * t;
 }
 
 function ExportBridge({ onReady }: { onReady: (fn: () => string) => void }) {
@@ -97,89 +95,136 @@ function Lights({ preset }: { preset: number }) {
   }
 }
 
-// Updates listener (camera) + source (normie position) every frame.
-function Audio3DBridge({
-  sourcePos = new THREE.Vector3(0, 0.6, 0),
+function AudioLevelBridge({
+  enabled,
+  intensity,
+  baseStrength,
+  baseSmoothing,
+  onValue,
 }: {
-  sourcePos?: THREE.Vector3;
+  enabled: boolean;
+  intensity: number; // 0..1
+  baseStrength: number; // trait baseline
+  baseSmoothing: number; // trait baseline
+  onValue: (v: number) => void;
 }) {
-  const camera = useThree((s) => s.camera);
+  const smoothRef = useRef(0);
 
-  const forward = useMemo(() => new THREE.Vector3(), []);
-  const up = useMemo(() => new THREE.Vector3(0, 1, 0), []);
+  useEffect(() => {
+    if (!enabled) {
+      smoothRef.current = 0;
+      onValue(0);
+      return;
+    }
+
+    let raf = 0;
+
+    // ✅ Map INTENSITY to: more strength + less smoothing (more punch)
+    const strength = clamp(baseStrength * lerp(0.65, 2.0, intensity), 0, 2.5);
+    const smoothing = clamp(
+      baseSmoothing + lerp(0.06, -0.1, intensity),
+      0.75,
+      0.98
+    );
+
+    const tick = () => {
+      const raw = NormieAmbient3d.getLevel01(); // 0..1 (smoothed by engine)
+
+      // scale by intensity strength
+      const target = clamp(raw * strength, 0, 1);
+
+      // ✅ Gate tiny values so "silence" actually collapses visuals
+      const GATE = 0.015; // tweak 0.01–0.03
+      const gated = target < GATE ? 0 : target;
+
+      const prev = smoothRef.current;
+      const next = prev * smoothing + gated * (1 - smoothing);
+      smoothRef.current = next;
+
+      onValue(next);
+      raf = requestAnimationFrame(tick);
+    };
+
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [enabled, intensity, baseStrength, baseSmoothing, onValue]);
+
+  return null;
+}
+
+/**
+ * ✅ NEW: AudioSpatialBridge
+ * Makes camera distance/zoom affect perceived loudness using PannerNode distance attenuation.
+ * - listener follows camera
+ * - source stays at (0,0,0) (voxels center)
+ */
+function AudioSpatialBridge() {
+  const { camera } = useThree();
+
+  const fwd = useMemo(() => new THREE.Vector3(), []);
+  const up = useMemo(() => new THREE.Vector3(), []);
 
   useFrame(() => {
+    // listener position = camera position
     NormieAmbient3d.setListenerPosition({
       x: camera.position.x,
       y: camera.position.y,
       z: camera.position.z,
     });
 
-    camera.getWorldDirection(forward);
+    // listener orientation = camera forward/up
+    camera.getWorldDirection(fwd);
+    up.copy(camera.up).normalize();
+
     NormieAmbient3d.setListenerOrientation(
-      { x: forward.x, y: forward.y, z: forward.z },
+      { x: fwd.x, y: fwd.y, z: fwd.z },
       { x: up.x, y: up.y, z: up.z }
     );
 
-    NormieAmbient3d.setSourcePosition({
-      x: sourcePos.x,
-      y: sourcePos.y,
-      z: sourcePos.z,
-    });
+    // sound source at scene center (voxels)
+    NormieAmbient3d.setSourcePosition({ x: 0, y: 0, z: 0 });
   });
 
   return null;
 }
 
-// Reads audio meter and drives starfield.
-// Uses setState ONLY from the frame callback (external system) → lint OK.
-function StarfieldAudioBridge({
-  base,
-  strength,
-  enabled,
-  onValue,
-}: {
-  base: number;
-  strength: number;
-  enabled: boolean;
-  onValue: (v: number) => void;
-}) {
-  const lastSent = useRef<number>(-1);
-
-  useFrame(() => {
-    const b = clamp(base, 0, 1);
-    const level = enabled ? NormieAmbient3d.getLevel01() : 0;
-    const v = clamp(b + level * strength, 0, 1);
-
-    if (Math.abs(v - lastSent.current) > 0.008) {
-      lastSent.current = v;
-      onValue(v);
-    }
-  });
-
-  return null;
-}
-
-export const NormieScene = forwardRef<
+export const NormieAudioScene = forwardRef<
   SceneHandle,
   {
     pixels: string | null;
     z: number[];
     extrude: number[];
-    starfield: number; // treated as BASE starfield
+
+    /**
+     * starfield = "MAX SPREAD" (trait-based cap)
+     * NOTE: we no longer treat this as the "rest" value.
+     */
+    starfield: number;
+
     seed: number;
+
     autoRotate: boolean;
     autoRotateSpeed?: number;
+
     noiseScale: number;
     lightPreset: number;
     materialMode: MaterialMode;
-    resetCameraZ?: number;
 
-    // optional controls
-    audioReactiveStarfield?: boolean;
-    audioStarfieldStrength?: number;
+    // ✅ audio knobs
+    audioReactiveStarfield?: boolean; // default false unless audio on in page
+    intensity?: number; // 0..1
+    audioStrengthBase?: number; // from traits (or constant)
+    audioSmoothingBase?: number; // from traits (or constant)
+
+    /**
+     * ✅ NEW: where the starfield sits when silent (pixels come together).
+     * If you want "nearly together" at silence, keep this small (0.02–0.08).
+     */
+    restStarfield?: number;
+
+    resetCameraZ?: number;
   }
->(function NormieScene(
+>(function NormieAudioScene(
   {
     pixels,
     z,
@@ -191,10 +236,14 @@ export const NormieScene = forwardRef<
     noiseScale,
     lightPreset,
     materialMode,
-    resetCameraZ = 2.75,
 
-    audioReactiveStarfield = true,
-    audioStarfieldStrength = 0.35,
+    audioReactiveStarfield = false,
+    intensity = 0.65,
+    audioStrengthBase = 0.35,
+    audioSmoothingBase = 0.9,
+
+    restStarfield = 0.00,
+    resetCameraZ = 4.75,
   },
   ref
 ) {
@@ -204,26 +253,31 @@ export const NormieScene = forwardRef<
   const resetAnimRef = useRef<number | null>(null);
 
   const targetTo = useMemo(() => new THREE.Vector3(0, 0, 0), []);
-  const posTo = useMemo(() => new THREE.Vector3(0, 0.6, resetCameraZ), [resetCameraZ]);
-
-  // ✅ render-driving value (no refs in JSX)
-  const [starfieldFinal, setStarfieldFinal] = useState<number>(() =>
-    clamp(starfield, 0, 1)
+  const posTo = useMemo(
+    () => new THREE.Vector3(0, 0.6, resetCameraZ),
+    [resetCameraZ]
   );
 
-  // keep initial-ish sync without using setState-in-effect:
-  // when props change, the frame loop will converge fast; but we can also update
-  // state in a microtask to avoid the lint rule "setState in effect body".
-  useEffect(() => {
-    // schedule async (not synchronous in effect body)
-    const id = window.setTimeout(() => {
-      if (!audioReactiveStarfield) {
-        setStarfieldFinal(clamp(starfield, 0, 1));
-        invalidateRef.current?.();
-      }
-    }, 0);
-    return () => window.clearTimeout(id);
-  }, [starfield, audioReactiveStarfield]);
+  // audio drive (0..1)
+  const [audioDrive, setAudioDrive] = useState(0);
+
+  /**
+   * ✅ KEY CHANGE:
+   * Silence should collapse (restStarfield).
+   * Audio should OPEN UP toward starfield (trait max spread).
+   *
+   * effectiveStarfield = lerp(rest, max, shapedDrive)
+   */
+  const maxStarfield = clamp(starfield, 0, 1);
+  const rest = clamp(restStarfield, 0, 1);
+
+  // intensity shaping curve:
+  // left (smooth) => needs more level to open up
+  // right (aggressive) => opens earlier
+  const curve = lerp(1.6, 0.65, clamp(intensity, 0, 1));
+  const shaped = clamp(Math.pow(audioDrive, curve), 0, 1);
+
+  const effectiveStarfield = clamp(lerp(rest, maxStarfield, shaped), 0, 1);
 
   useImperativeHandle(ref, () => ({
     exportPng: () => exporterRef.current?.() ?? null,
@@ -287,14 +341,16 @@ export const NormieScene = forwardRef<
         <ExportBridge onReady={(fn) => (exporterRef.current = fn)} />
         <InvalidateBridge onReady={(fn) => (invalidateRef.current = fn)} />
 
-        <Audio3DBridge />
+        {/* ✅ NEW: camera -> listener mapping so zoom changes loudness */}
+        {audioReactiveStarfield ? <AudioSpatialBridge /> : null}
 
-        <StarfieldAudioBridge
-          base={starfield}
-          strength={audioStarfieldStrength}
-          enabled={audioReactiveStarfield}
+        <AudioLevelBridge
+          enabled={!!pixels && audioReactiveStarfield}
+          intensity={intensity}
+          baseStrength={audioStrengthBase}
+          baseSmoothing={audioSmoothingBase}
           onValue={(v) => {
-            setStarfieldFinal(v);
+            setAudioDrive(v);
             invalidateRef.current?.();
           }}
         />
@@ -304,7 +360,7 @@ export const NormieScene = forwardRef<
             pixels={pixels}
             z={z}
             extrude={extrude}
-            starfield={starfieldFinal}
+            starfield={effectiveStarfield}
             seed={seed}
             noiseScale={noiseScale}
             materialMode={materialMode}
@@ -315,7 +371,7 @@ export const NormieScene = forwardRef<
           ref={controlsRef}
           enableDamping
           dampingFactor={0.08}
-          autoRotate={autoRotate}
+          autoRotate={audioReactiveStarfield && autoRotate}
           autoRotateSpeed={autoRotateSpeed}
           minDistance={0.8}
           maxDistance={120}
