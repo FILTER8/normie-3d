@@ -1,6 +1,8 @@
 /* ===========================
    app/ambient/page.tsx
    Trait-driven studio + audio-reactive starfield
+   UI: AUDIO ON/OFF + VOLUME + INTENSITY + AUTO ID (40s) + COUNTDOWN
+   Everything else derives from traits.
    Desktop-only gate (mobile shows clean screen)
    =========================== */
 "use client";
@@ -23,12 +25,10 @@ function isMobileUA() {
   if (typeof navigator === "undefined") return false;
   const ua = navigator.userAgent || "";
 
-  // iOS + iPadOS (incl. iPadOS reporting as Mac)
   const iOSUA = /iPad|iPhone|iPod/i.test(ua);
   const iPadOS =
     navigator.platform === "MacIntel" && (navigator.maxTouchPoints ?? 0) > 1;
 
-  // General mobile
   const mobile =
     /Android|webOS|BlackBerry|IEMobile|Opera Mini/i.test(ua) || iOSUA || iPadOS;
 
@@ -172,7 +172,6 @@ function DesktopOnlyScreen() {
     <main className="min-h-screen bg-[#e3e5e4] text-[#48494b] flex items-center justify-center p-6">
       <div className="w-full max-w-[420px] text-center">
         <div className="text-[10px] opacity-70">NORMIES</div>
-
         <h1 className="mt-2 text-xl tracking-tight">AMBIENT 3D</h1>
 
         <p className="mt-4 text-xs opacity-75 leading-relaxed">
@@ -186,7 +185,6 @@ function DesktopOnlyScreen() {
           >
             BACK
           </a>
-
           <a
             href="/sculpt"
             className="inline-block border border-black/20 bg-white/20 px-5 py-3 text-xs hover:bg-black/5 transition"
@@ -203,22 +201,15 @@ function DesktopOnlyScreen() {
   );
 }
 
+/** ✅ Page only decides which component to render (stable hook order) */
 export default function Page() {
-  // ── Desktop-only gate (client-side, no server headers in this file)
   const [isMobile, setIsMobile] = useState<boolean | null>(null);
 
   useEffect(() => {
     setIsMobile(isMobileUA());
   }, []);
 
-  // If mobile, stop anything that might already be running (extra safety)
-  useEffect(() => {
-    if (isMobile) {
-      NormieAmbient3d.stop();
-    }
-  }, [isMobile]);
-
-  // While we detect UA, keep it neutral (avoids flicker)
+  // While detecting, keep it calm
   if (isMobile === null) {
     return (
       <div className="min-h-screen bg-[#e3e5e4] text-[#48494b] flex items-center justify-center">
@@ -227,13 +218,13 @@ export default function Page() {
     );
   }
 
-  // Mobile: show clean screen only
-  if (isMobile) {
-    return <DesktopOnlyScreen />;
-  }
+  if (isMobile) return <DesktopOnlyScreen />;
 
-  // ─────────────────────────────────────────────
-  // Desktop: full ambient experience below
+  return <DesktopAmbient />;
+}
+
+/** ✅ All the heavy hooks live here */
+function DesktopAmbient() {
   const sceneRef = useRef<SceneHandle | null>(null);
   const fullscreenTargetRef = useRef<HTMLDivElement | null>(null);
   const sceneContainerRef = useRef<HTMLDivElement | null>(null);
@@ -282,7 +273,6 @@ export default function Page() {
     };
 
     document.addEventListener("fullscreenchange", onChange);
-
     const webkitEventName = "webkitfullscreenchange" as const;
     document.addEventListener(webkitEventName, onChange as EventListener);
 
@@ -653,7 +643,7 @@ export default function Page() {
         </div>
       ) : null}
 
-      {/* Desktop layout */}
+      {/* Desktop layout only */}
       <div className="hidden md:flex h-full">
         <aside
           className={`relative h-full shrink-0 flex-none overflow-hidden border-r border-black/10 bg-[#e3e5e4] text-[#48494b] transition-[width] duration-200 ${

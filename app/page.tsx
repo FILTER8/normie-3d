@@ -80,9 +80,29 @@ export default function Page() {
         </section>
 
         {/* License */}
-        <div className="mt-3 sm:mt-6 text-center text-[10px] opacity-50 tracking-wide">
+        <div className="mt-3 sm:mt-6 text-center text-[12px] tracking-wide">
           CC0
         </div>
+ 
+ {/* Donate */}
+<div className="mt-3 sm:mt-6 text-center text-[10px] opacity-50 tracking-wide">
+  Donate (ETH):{" "}
+  <span className="tabular-nums break-all">
+    0x019b0ee245fb09aaf92ac93ca3309832b7974681
+  </span>{" "}
+  <button
+    type="button"
+    className="underline ml-2"
+    onClick={async () => {
+      const addr = "0x019b0ee245fb09aaf92ac93ca3309832b7974681";
+      try {
+        await navigator.clipboard.writeText(addr);
+      } catch {}
+    }}
+  >
+    copy
+  </button>
+</div>
 
         {/* Footer */}
         <footer className="mt-10 sm:mt-32 border-t border-black/10 pt-6 sm:pt-8 text-[10px] opacity-50">
