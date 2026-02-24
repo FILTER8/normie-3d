@@ -1,22 +1,14 @@
 /* ===========================
    app/ambient/page.tsx
    Trait-driven studio + audio-reactive starfield
-   UI: AUDIO ON/OFF + VOLUME + INTENSITY + AUTO ID (40s) + COUNTDOWN
-   Everything else derives from traits.
    Desktop-only gate (mobile shows clean screen)
-
-   ✅ FIX: Auto-ID timer drift
-   - Replace setInterval(AUTO_ID_MS) with self-correcting setTimeout loop
-   - Countdown always tracks nextAutoAtRef (single source of truth)
    =========================== */
 "use client";
 
+import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { fetchPixels, fetchTraits } from "../lib/normiesApi";
-import {
-  NormieAudioScene,
-  type SceneHandle,
-} from "../components/NormieAudioScene";
+import { NormieAudioScene, type SceneHandle } from "../components/NormieAudioScene";
 import { NormieAmbient3d } from "../lib/NormieAmbient3d";
 import {
   deriveStudioParams,
@@ -32,10 +24,12 @@ function isMobileUA() {
   if (typeof navigator === "undefined") return false;
   const ua = navigator.userAgent || "";
 
+  // iOS + iPadOS (incl. iPadOS reporting as Mac)
   const iOSUA = /iPad|iPhone|iPod/i.test(ua);
   const iPadOS =
     navigator.platform === "MacIntel" && (navigator.maxTouchPoints ?? 0) > 1;
 
+  // General mobile
   const mobile =
     /Android|webOS|BlackBerry|IEMobile|Opera Mini/i.test(ua) || iOSUA || iPadOS;
 
@@ -179,6 +173,7 @@ function DesktopOnlyScreen() {
     <main className="min-h-screen bg-[#e3e5e4] text-[#48494b] flex items-center justify-center p-6">
       <div className="w-full max-w-[420px] text-center">
         <div className="text-[10px] opacity-70">NORMIES</div>
+
         <h1 className="mt-2 text-xl tracking-tight">AMBIENT 3D</h1>
 
         <p className="mt-4 text-xs opacity-75 leading-relaxed">
@@ -186,18 +181,19 @@ function DesktopOnlyScreen() {
         </p>
 
         <div className="mt-8 flex items-center justify-center gap-3">
-          <a
+          <Link
             href="/"
             className="inline-block border border-black/20 bg-white/20 px-5 py-3 text-xs hover:bg-black/5 transition"
           >
             BACK
-          </a>
-          <a
+          </Link>
+
+          <Link
             href="/sculpt"
             className="inline-block border border-black/20 bg-white/20 px-5 py-3 text-xs hover:bg-black/5 transition"
           >
             SCULPT
-          </a>
+          </Link>
         </div>
 
         <div className="mt-6 text-[10px] opacity-60">
@@ -208,29 +204,11 @@ function DesktopOnlyScreen() {
   );
 }
 
-/** ✅ Page only decides which component to render (stable hook order) */
 export default function Page() {
-  const [isMobile, setIsMobile] = useState<boolean | null>(null);
+  // Desktop-only gate (client-side): computed once on mount
+  const [isMobile] = useState<boolean>(() => isMobileUA());
 
-  useEffect(() => {
-    setIsMobile(isMobileUA());
-  }, []);
-
-  if (isMobile === null) {
-    return (
-      <div className="min-h-screen bg-[#e3e5e4] text-[#48494b] flex items-center justify-center">
-        <div className="text-[10px] opacity-60">loading…</div>
-      </div>
-    );
-  }
-
-  if (isMobile) return <DesktopOnlyScreen />;
-
-  return <DesktopAmbient />;
-}
-
-/** ✅ All the heavy hooks live here */
-function DesktopAmbient() {
+  // Desktop refs (safe to declare always)
   const sceneRef = useRef<SceneHandle | null>(null);
   const fullscreenTargetRef = useRef<HTMLDivElement | null>(null);
   const sceneContainerRef = useRef<HTMLDivElement | null>(null);
@@ -238,6 +216,7 @@ function DesktopAmbient() {
   const [menuOpen, setMenuOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
 
+  // ✅ IMPORTANT: random ID autoloads on first render
   const [idInput, setIdInput] = useState<string>(() => randomIdString());
   const id = useMemo(() => clampId(parseInt(idInput, 10)), [idInput]);
 
@@ -255,9 +234,8 @@ function DesktopAmbient() {
   const [isFullscreen, setIsFullscreen] = useState(false);
 
   const [autoIdOn, setAutoIdOn] = useState(false);
-  // ✅ autoIdTimerRef is now a setTimeout handle (still number in browser)
-  const autoIdTimerRef = useRef<number | null>(null);
-  const autoCountdownTimerRef = useRef<number | null>(null);
+  const autoIdTimerRef = useRef<number | null>(null); // timeout id
+  const autoCountdownTimerRef = useRef<number | null>(null); // interval id
   const nextAutoAtRef = useRef<number | null>(null);
   const [autoIn, setAutoIn] = useState(0);
 
@@ -267,7 +245,17 @@ function DesktopAmbient() {
     setIdInput(randomIdString());
   }, []);
 
+  // If mobile, stop anything that might already be running (extra safety)
   useEffect(() => {
+    if (isMobile) {
+      NormieAmbient3d.stop();
+    }
+  }, [isMobile]);
+
+  // Fullscreen listener (desktop only)
+  useEffect(() => {
+    if (isMobile !== false) return;
+
     const doc = document as FullscreenDoc;
 
     const onChange = () => {
@@ -288,56 +276,26 @@ function DesktopAmbient() {
       document.removeEventListener("fullscreenchange", onChange);
       document.removeEventListener(webkitEventName, onChange as EventListener);
     };
-  }, []);
+  }, [isMobile]);
 
+  // Menu scroll lock (desktop only)
   useEffect(() => {
+    if (isMobile !== false) return;
     if (!menuOpen) return;
     const prev = document.body.style.overflow;
     document.body.style.overflow = "hidden";
     return () => {
       document.body.style.overflow = prev;
     };
-  }, [menuOpen]);
+  }, [menuOpen, isMobile]);
 
-  // ✅ FIXED AUTO ID: drift-free setTimeout loop + countdown tied to nextAutoAtRef
+  // ✅ Auto-ID timers (desktop only)
+  // NOTE: to satisfy react-hooks/set-state-in-effect, we do NOT change the ID inside this effect.
+  // The "instant change when enabling AUTO" is done in the button click handler.
   useEffect(() => {
-    // clear timers
-    if (autoIdTimerRef.current !== null) {
-      window.clearTimeout(autoIdTimerRef.current);
-      autoIdTimerRef.current = null;
-    }
-    if (autoCountdownTimerRef.current !== null) {
-      window.clearInterval(autoCountdownTimerRef.current);
-      autoCountdownTimerRef.current = null;
-    }
+    if (isMobile !== false) return;
 
-    if (!autoIdOn) {
-      nextAutoAtRef.current = null;
-      queueMicrotask(() => setAutoIn(0));
-      return;
-    }
-
-    const armNext = () => {
-      // single source of truth
-      nextAutoAtRef.current = Date.now() + AUTO_ID_MS;
-      setAutoIn(Math.ceil(AUTO_ID_MS / 1000));
-
-      autoIdTimerRef.current = window.setTimeout(() => {
-        newRandomId();
-        armNext(); // schedule next cycle based on actual firing time
-      }, AUTO_ID_MS);
-    };
-
-    armNext();
-
-    autoCountdownTimerRef.current = window.setInterval(() => {
-      const nextAt = nextAutoAtRef.current;
-      if (!nextAt) return;
-      const s = Math.max(0, Math.ceil((nextAt - Date.now()) / 1000));
-      setAutoIn(s);
-    }, 250);
-
-    return () => {
+    const clearTimers = () => {
       if (autoIdTimerRef.current !== null) {
         window.clearTimeout(autoIdTimerRef.current);
         autoIdTimerRef.current = null;
@@ -347,9 +305,50 @@ function DesktopAmbient() {
         autoCountdownTimerRef.current = null;
       }
     };
-  }, [autoIdOn, newRandomId]);
 
+    clearTimers();
+
+    if (!autoIdOn) {
+      nextAutoAtRef.current = null;
+      queueMicrotask(() => setAutoIn(0));
+      return;
+    }
+
+    let cancelled = false;
+
+    const scheduleNext = () => {
+      const nextAt = Date.now() + AUTO_ID_MS;
+      nextAutoAtRef.current = nextAt;
+
+      // lint-friendly: still okay (if your lint flags this too, we can fully derive autoIn w/o state)
+      setAutoIn(Math.ceil(AUTO_ID_MS / 1000));
+
+      autoIdTimerRef.current = window.setTimeout(() => {
+        if (cancelled) return;
+        newRandomId();
+        scheduleNext();
+      }, AUTO_ID_MS);
+    };
+
+    scheduleNext();
+
+    autoCountdownTimerRef.current = window.setInterval(() => {
+      const nextAt = nextAutoAtRef.current;
+      if (!nextAt) return;
+      const s = Math.max(0, Math.ceil((nextAt - Date.now()) / 1000));
+      setAutoIn(s);
+    }, 250);
+
+    return () => {
+      cancelled = true;
+      clearTimers();
+    };
+  }, [autoIdOn, newRandomId, isMobile]);
+
+  // Fetch pixels/traits when id changes (desktop only)
   useEffect(() => {
+    if (isMobile !== false) return;
+
     let cancelled = false;
 
     queueMicrotask(() => setStatus({ loading: true, error: "" }));
@@ -372,21 +371,27 @@ function DesktopAmbient() {
       cancelled = true;
       window.clearTimeout(t);
     };
-  }, [id]);
+  }, [id, isMobile]);
 
+  // Push data into engine (desktop only)
   useEffect(() => {
+    if (isMobile !== false) return;
     NormieAmbient3d.setData({ id, pixels, traits });
-  }, [id, pixels, traits]);
+  }, [id, pixels, traits, isMobile]);
 
   useEffect(() => {
+    if (isMobile !== false) return;
     NormieAmbient3d.setVolume(volume);
-  }, [volume]);
+  }, [volume, isMobile]);
 
   useEffect(() => {
+    if (isMobile !== false) return;
     NormieAmbient3d.setIntensity(intensity);
-  }, [intensity]);
+  }, [intensity, isMobile]);
 
+  // Start/stop audio engine on changes (desktop only)
   useEffect(() => {
+    if (isMobile !== false) return;
     if (!audioOn) return;
     if (!pixels) return;
 
@@ -397,14 +402,15 @@ function DesktopAmbient() {
       NormieAmbient3d.setIntensity(intensity);
       await NormieAmbient3d.start();
     })();
-  }, [audioOn, id, pixels, traits, volume, intensity]);
+  }, [audioOn, id, pixels, traits, volume, intensity, isMobile]);
 
   useEffect(() => {
+    if (isMobile !== false) return;
     if (!pixels && audioOn) {
       NormieAmbient3d.stop();
       queueMicrotask(() => setAudioOn(false));
     }
-  }, [pixels, audioOn]);
+  }, [pixels, audioOn, isMobile]);
 
   const prevId = useCallback(() => {
     setAutoIdOn(false);
@@ -446,7 +452,10 @@ function DesktopAmbient() {
     }
   }, []);
 
+  // Keyboard controls (desktop only)
   useEffect(() => {
+    if (isMobile !== false) return;
+
     const onKeyDown = (e: KeyboardEvent) => {
       if (isTypingTarget(e.target)) return;
 
@@ -475,7 +484,7 @@ function DesktopAmbient() {
 
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [nextId, prevId, toggleAudio, toggleFs]);
+  }, [nextId, prevId, toggleAudio, toggleFs, isMobile]);
 
   const traitList: Trait[] = traits?.attributes ?? [];
 
@@ -554,7 +563,13 @@ function DesktopAmbient() {
 
       <div className="mt-2 flex gap-2">
         <button
-          onClick={() => setAutoIdOn((v) => !v)}
+          onClick={() => {
+            setAutoIdOn((v) => {
+              const next = !v;
+              if (next) newRandomId(); // ✅ immediate change happens in event handler (lint-friendly)
+              return next;
+            });
+          }}
           className="flex-1 border border-black/20 px-3 py-2 text-[10px] hover:bg-black/5"
           style={{ touchAction: "manipulation" }}
           title="Auto ID (40s)"
@@ -562,6 +577,7 @@ function DesktopAmbient() {
         >
           {autoIdOn ? `AUTO ID: ON (${autoIn}s)` : "AUTO ID: OFF"}
         </button>
+
         <button
           onClick={() => {
             setAutoIdOn(false);
@@ -616,9 +632,9 @@ function DesktopAmbient() {
         <PixelSlider
           label="INTENSITY (smooth → aggressive)"
           value={intensity}
-          onChange={(v) => setIntensity(clamp(v, 0, 1))}
+          onChange={(v) => setIntensity(clamp(v, 0, 5))}
           min={0}
-          max={1}
+          max={5}
           step={0.01}
         />
 
@@ -645,6 +661,12 @@ function DesktopAmbient() {
     </div>
   );
 
+  // Mobile: show clean screen only
+  if (isMobile) {
+    return <DesktopOnlyScreen />;
+  }
+
+  // Desktop render
   return (
     <div
       className="fixed inset-0 bg-[#e3e5e4] overflow-hidden"
@@ -656,7 +678,7 @@ function DesktopAmbient() {
         </div>
       ) : null}
 
-      {/* Desktop layout only */}
+      {/* Desktop layout */}
       <div className="hidden md:flex h-full">
         <aside
           className={`relative h-full shrink-0 flex-none overflow-hidden border-r border-black/10 bg-[#e3e5e4] text-[#48494b] transition-[width] duration-200 ${
@@ -736,5 +758,4 @@ function DesktopAmbient() {
       `}</style>
     </div>
   );
-  
 }
