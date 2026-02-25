@@ -63,6 +63,18 @@ export default function Page() {
                 </a>
               </p>
             </div>
+            {/* graveyard */}
+            <div className="text-center space-y-3 sm:space-y-5">
+              <a
+                href="/graveyard"
+                className="block border border-black/20 py-4 sm:py-5 text-[12px] sm:text-sm tracking-[0.26em] sm:tracking-[0.3em] uppercase hover:bg-black/5 transition"
+              >
+                Graveyard
+              </a>
+              <p className="text-[10px] sm:text-[11px] opacity-60">
+                Explore burned tokens
+              </p>
+            </div>
           </div>
         </section>
 
