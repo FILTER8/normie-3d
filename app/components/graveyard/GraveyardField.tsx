@@ -42,7 +42,7 @@ export function GraveyardField({
   burns: Burn[];
   hiddenTokenIds: Set<string>;
   onSelect: (burn: Burn, worldPos: THREE.Vector3) => void;
-  onHoverChange?: (hovering: boolean) => void; // ✅ optional
+  onHoverChange?: (hovering: boolean) => void;
 }) {
   const meshRef = useRef<THREE.InstancedMesh | null>(null);
 
@@ -63,7 +63,6 @@ export function GraveyardField({
     []
   );
 
-  // ✅ Base (non-hidden) matrices/metadata – independent of hiddenTokenIds
   const { matrices, baseScales, phases } = useMemo(() => {
     const mats: THREE.Matrix4[] = [];
     const scales: number[] = [];
@@ -100,11 +99,13 @@ export function GraveyardField({
     return { matrices: mats, baseScales: scales, phases: ph };
   }, [burns, dummy]);
 
-  // ✅ Critical: write instance matrices as soon as we have them (no “refresh needed”)
+  // ✅ Write ALL matrices whenever burns/hidden changes
   useEffect(() => {
     const mesh = meshRef.current;
     if (!mesh) return;
-    if (matrices.length === 0) return;
+
+    // Keep three's internal count in sync (important for raycasting & rendering)
+    mesh.count = matrices.length;
 
     for (let i = 0; i < matrices.length; i++) {
       const burn = burns[i];
@@ -114,6 +115,7 @@ export function GraveyardField({
       tmpMat.decompose(tmpPos, tmpQuat, tmpScale);
 
       const hidden = hiddenTokenIds.has(burn.tokenId);
+
       dummy.position.copy(tmpPos);
       dummy.quaternion.copy(tmpQuat);
       dummy.scale.setScalar(hidden ? 0 : tmpScale.x);
@@ -125,7 +127,7 @@ export function GraveyardField({
     mesh.instanceMatrix.needsUpdate = true;
   }, [matrices, burns, hiddenTokenIds, dummy, tmpMat, tmpPos, tmpQuat, tmpScale]);
 
-  // ✅ Twinkle loop (only for visible instances)
+  // ✅ Twinkle visible subset (optional)
   useFrame(({ clock }) => {
     const mesh = meshRef.current;
     if (!mesh) return;
@@ -133,7 +135,6 @@ export function GraveyardField({
     if (n === 0) return;
 
     const t = clock.elapsedTime;
-
     const updates = Math.min(24, n);
     const start = (Math.floor(t * 60) * updates) % n;
 
@@ -160,14 +161,17 @@ export function GraveyardField({
     mesh.instanceMatrix.needsUpdate = true;
   });
 
+  const count = matrices.length;
+
   return (
     <instancedMesh
+      // ✅ THE BIG FIX: force remount when count changes (0 -> N)
+      key={count}
       ref={meshRef}
-      args={[geom, mat, matrices.length]}
+      args={[geom, mat, Math.max(1, count)]} // never construct with 0
       frustumCulled={false}
       onPointerOver={() => onHoverChange?.(true)}
       onPointerOut={() => onHoverChange?.(false)}
-      // ✅ Open on pointer DOWN (most reliable with OrbitControls)
       onPointerDown={(e) => {
         e.stopPropagation();
 
@@ -178,7 +182,7 @@ export function GraveyardField({
         if (!burn) return;
         if (hiddenTokenIds.has(burn.tokenId)) return;
 
-        // ✅ Instant hide (per-instance) by scaling to 0
+        // ✅ instantly hide this instance (per-instance “invisible”)
         const mesh = meshRef.current;
         if (mesh) {
           mesh.getMatrixAt(i, tmpMat);
@@ -193,7 +197,7 @@ export function GraveyardField({
           mesh.instanceMatrix.needsUpdate = true;
         }
 
-        // ✅ world-space hit point for focusing/camera
+        // ✅ always open (world space)
         onSelect(burn, e.point.clone());
       }}
     />
