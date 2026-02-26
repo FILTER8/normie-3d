@@ -4,12 +4,19 @@ import { OrbitControls } from "@react-three/drei";
 import { useRef } from "react";
 import type { OrbitControls as OrbitControlsImpl } from "three-stdlib";
 
-export function ShipControls() {
-  const controlsRef = useRef<OrbitControlsImpl | null>(null);
+export function ShipControls({
+  controlsRef,
+}: {
+  controlsRef: React.MutableRefObject<OrbitControlsImpl | null>;
+}) {
+  const localRef = useRef<OrbitControlsImpl | null>(null);
 
   return (
     <OrbitControls
-      ref={controlsRef}
+      ref={(c) => {
+        localRef.current = c;
+        controlsRef.current = c;
+      }}
       enableDamping
       dampingFactor={0.085}
       rotateSpeed={0.55}
