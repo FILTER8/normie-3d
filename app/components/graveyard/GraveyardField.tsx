@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
 import { useFrame } from "@react-three/fiber";
 import type { Burn } from "./GraveyardScene";
@@ -13,25 +13,22 @@ function hash01(n: number) {
   return (x >>> 0) / 4294967296;
 }
 
-// ✅ wider / more space
 function torusPosition(i: number) {
   const u = hash01(i * 1013 + 17);
   const v = hash01(i * 2027 + 29);
   const w = hash01(i * 3011 + 41);
 
   const theta = u * Math.PI * 2;
-
-  // more spread than before
-  const baseR = 24 + Math.floor(i / 36) * 3.4; // bigger + expands faster
-  const rJitter = (v - 0.5) * 18;              // wider jitter
-  const R = THREE.MathUtils.clamp(baseR + rJitter, 18, 140);
+  const baseR = 18 + Math.floor(i / 40) * 2.2;
+  const rJitter = (v - 0.5) * 10;
+  const R = THREE.MathUtils.clamp(baseR + rJitter, 14, 70);
 
   const phi = w * Math.PI * 2;
-  const minor = 5.0 + hash01(i * 991 + 7) * 14; // thicker belt
+  const minor = 2.5 + hash01(i * 991 + 7) * 7.5;
 
   const x = Math.cos(theta) * (R + Math.cos(phi) * minor);
   const z = Math.sin(theta) * (R + Math.cos(phi) * minor);
-  const y = Math.sin(phi) * minor * 0.9;
+  const y = Math.sin(phi) * minor * 0.75;
 
   return { x, y, z };
 }
@@ -40,10 +37,12 @@ export function GraveyardField({
   burns,
   hiddenTokenIds,
   onSelect,
+  onHoverChange,
 }: {
   burns: Burn[];
   hiddenTokenIds: Set<string>;
   onSelect: (burn: Burn, worldPos: THREE.Vector3) => void;
+  onHoverChange?: (hovering: boolean) => void; // ✅ optional
 }) {
   const meshRef = useRef<THREE.InstancedMesh | null>(null);
 
@@ -64,27 +63,25 @@ export function GraveyardField({
     []
   );
 
-  const { matrices, positions, baseScales, phases } = useMemo(() => {
+  // ✅ Base (non-hidden) matrices/metadata – independent of hiddenTokenIds
+  const { matrices, baseScales, phases } = useMemo(() => {
     const mats: THREE.Matrix4[] = [];
-    const pos: THREE.Vector3[] = [];
     const scales: number[] = [];
     const ph: number[] = [];
 
-    if (burns.length === 0) return { matrices: mats, positions: pos, baseScales: scales, phases: ph };
+    if (burns.length === 0) return { matrices: mats, baseScales: scales, phases: ph };
 
     const minB = Math.min(...burns.map((b) => b.blockNumber));
     const maxB = Math.max(...burns.map((b) => b.blockNumber));
     const span = Math.max(1, maxB - minB);
 
     for (let i = 0; i < burns.length; i++) {
-      const p = torusPosition(i);
       const burn = burns[i];
+      const p = torusPosition(i);
 
-      // newer = bigger, older = smaller
       const age01 = (burn.blockNumber - minB) / span;
-      const base = THREE.MathUtils.lerp(0.14, 0.46, age01);
-
-      const jitter = hash01(i * 97 + 3) * 0.07;
+      const base = THREE.MathUtils.lerp(0.16, 0.42, age01);
+      const jitter = hash01(i * 97 + 3) * 0.06;
       const s = base + jitter;
 
       scales.push(s);
@@ -98,50 +95,63 @@ export function GraveyardField({
       dummy.updateMatrix();
 
       mats.push(dummy.matrix.clone());
-      pos.push(new THREE.Vector3(p.x, p.y, p.z));
     }
 
-    return { matrices: mats, positions: pos, baseScales: scales, phases: ph };
+    return { matrices: mats, baseScales: scales, phases: ph };
   }, [burns, dummy]);
 
-  const wroteInitial = useRef(false);
+  // ✅ Critical: write instance matrices as soon as we have them (no “refresh needed”)
+  useEffect(() => {
+    const mesh = meshRef.current;
+    if (!mesh) return;
+    if (matrices.length === 0) return;
 
+    for (let i = 0; i < matrices.length; i++) {
+      const burn = burns[i];
+      if (!burn) continue;
+
+      tmpMat.copy(matrices[i]);
+      tmpMat.decompose(tmpPos, tmpQuat, tmpScale);
+
+      const hidden = hiddenTokenIds.has(burn.tokenId);
+      dummy.position.copy(tmpPos);
+      dummy.quaternion.copy(tmpQuat);
+      dummy.scale.setScalar(hidden ? 0 : tmpScale.x);
+      dummy.updateMatrix();
+
+      mesh.setMatrixAt(i, dummy.matrix);
+    }
+
+    mesh.instanceMatrix.needsUpdate = true;
+  }, [matrices, burns, hiddenTokenIds, dummy, tmpMat, tmpPos, tmpQuat, tmpScale]);
+
+  // ✅ Twinkle loop (only for visible instances)
   useFrame(({ clock }) => {
     const mesh = meshRef.current;
     if (!mesh) return;
-
-    // initial write
-    if (!wroteInitial.current) {
-      wroteInitial.current = true;
-      for (let i = 0; i < matrices.length; i++) mesh.setMatrixAt(i, matrices[i]);
-      mesh.instanceMatrix.needsUpdate = true;
-      return;
-    }
-
-    const t = clock.elapsedTime;
     const n = matrices.length;
     if (n === 0) return;
 
-    const updates = Math.min(28, n);
+    const t = clock.elapsedTime;
+
+    const updates = Math.min(24, n);
     const start = (Math.floor(t * 60) * updates) % n;
 
     for (let k = 0; k < updates; k++) {
       const i = (start + k) % n;
 
-      // if opened -> hide by scaling to 0 (still pickable only if you click exactly there,
-      // but practically it's gone; if you want fully unpickable, we can also early return in handler)
-      const tokenId = burns[i].tokenId;
-      const hidden = hiddenTokenIds.has(tokenId);
+      const burn = burns[i];
+      if (!burn) continue;
+      if (hiddenTokenIds.has(burn.tokenId)) continue;
 
       tmpMat.copy(matrices[i]);
       tmpMat.decompose(tmpPos, tmpQuat, tmpScale);
 
-      const pulse = hidden ? 0 : 1 + 0.06 * Math.sin(t * 1.15 + phases[i]);
-      const s = hidden ? 0 : baseScales[i] * pulse;
+      const pulse = 1 + 0.06 * Math.sin(t * 1.15 + phases[i]);
 
       dummy.position.copy(tmpPos);
       dummy.quaternion.copy(tmpQuat);
-      dummy.scale.setScalar(s);
+      dummy.scale.setScalar(baseScales[i] * pulse);
       dummy.updateMatrix();
 
       mesh.setMatrixAt(i, dummy.matrix);
@@ -155,18 +165,36 @@ export function GraveyardField({
       ref={meshRef}
       args={[geom, mat, matrices.length]}
       frustumCulled={false}
+      onPointerOver={() => onHoverChange?.(true)}
+      onPointerOut={() => onHoverChange?.(false)}
+      // ✅ Open on pointer DOWN (most reliable with OrbitControls)
       onPointerDown={(e) => {
         e.stopPropagation();
+
         const i = e.instanceId ?? -1;
         if (i < 0) return;
 
         const burn = burns[i];
-        if (hiddenTokenIds.has(burn.tokenId)) return; // ✅ don't allow re-click
+        if (!burn) return;
+        if (hiddenTokenIds.has(burn.tokenId)) return;
 
-        const p = positions[i];
-        if (!p) return;
+        // ✅ Instant hide (per-instance) by scaling to 0
+        const mesh = meshRef.current;
+        if (mesh) {
+          mesh.getMatrixAt(i, tmpMat);
+          tmpMat.decompose(tmpPos, tmpQuat, tmpScale);
 
-        onSelect(burn, p);
+          dummy.position.copy(tmpPos);
+          dummy.quaternion.copy(tmpQuat);
+          dummy.scale.setScalar(0);
+          dummy.updateMatrix();
+
+          mesh.setMatrixAt(i, dummy.matrix);
+          mesh.instanceMatrix.needsUpdate = true;
+        }
+
+        // ✅ world-space hit point for focusing/camera
+        onSelect(burn, e.point.clone());
       }}
     />
   );
