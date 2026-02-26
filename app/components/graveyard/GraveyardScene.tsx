@@ -21,20 +21,19 @@ function CameraFocus({
   const { camera } = useThree();
 
   const anim = useRef<{
-    t: number; // 0..1 progress
-    dur: number; // seconds
+    t: number;
+    dur: number;
     fromTarget: THREE.Vector3;
     toTarget: THREE.Vector3;
     fromCam: THREE.Vector3;
     toCam: THREE.Vector3;
+    toCamOvershoot: THREE.Vector3;
     active: boolean;
   } | null>(null);
 
-  // Nice cinematic ease-in-out (cubic)
   const easeInOutCubic = (x: number) =>
     x < 0.5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2;
 
-  // Optional: cancel animation if user grabs controls
   useEffect(() => {
     const controls = controlsRef.current;
     if (!controls) return;
@@ -44,73 +43,73 @@ function CameraFocus({
     };
 
     controls.addEventListener("start", cancel);
-    return () => {
-      controls.removeEventListener("start", cancel);
-    };
+    return () => controls.removeEventListener("start", cancel);
   }, [controlsRef]);
 
   useFrame((_, delta) => {
     const controls = controlsRef.current;
     if (!controls) return;
 
-    // Start a new focus animation when focusTargetRef is set
     const newTarget = focusTargetRef.current;
     if (newTarget) {
-      // lock the animation data once
       const fromTarget = controls.target.clone();
       const toTarget = newTarget.clone();
 
       const fromCam = camera.position.clone();
 
-      // Preserve current angle (offset direction), but zoom in (shorten distance)
-      const offset = camera.position.clone().sub(controls.target);
+      // ✅ “Reset to front” direction (world-space)
+      // Feel free to tweak this vector to define your “front”.
+      // (0, 0.25, 1) = slightly above, looking from +Z toward the token.
+      const frontDir = new THREE.Vector3(0, 0.25, 1).normalize();
 
-      const zoomFactor = 0.68; // cinematic: 0.6 dramatic, 0.75 moderate, 0.85 subtle
-      offset.multiplyScalar(zoomFactor);
+      // ✅ Distance from the token (controls how tight it is)
+      const dist = 6.2;
 
-      // slight “hero” lift WITHOUT changing angle too much
-      // (tiny only — remove if you dislike it)
-      offset.y += 0.15;
+      // ✅ Final camera position
+      const toCam = toTarget.clone().add(frontDir.multiplyScalar(dist));
 
-      const toCam = toTarget.clone().add(offset);
+      // ✅ Small cinematic overshoot (go a bit closer then settle back)
+      const overshootDir = new THREE.Vector3(0, 0.22, 1).normalize();
+      const toCamOvershoot = toTarget.clone().add(overshootDir.multiplyScalar(dist * 0.92));
+
+      // Keep camera upright
+      camera.up.set(0, 1, 0);
 
       anim.current = {
         t: 0,
-        dur: 0.9, // seconds; 1.1 slower floaty, 0.7 snappier
+        dur: 3.5, // a touch slower for cinematic
         fromTarget,
         toTarget,
         fromCam,
         toCam,
+        toCamOvershoot,
         active: true,
       };
 
-      focusTargetRef.current = null; // consume trigger
+      focusTargetRef.current = null;
     }
 
     const a = anim.current;
     if (!a || !a.active) return;
 
-    // advance time
     a.t = Math.min(1, a.t + delta / a.dur);
-
-    // easing
     const e = easeInOutCubic(a.t);
 
-    // interpolate
+    // target always eases straight to the token
     controls.target.copy(a.fromTarget).lerp(a.toTarget, e);
-    camera.position.copy(a.fromCam).lerp(a.toCam, e);
 
-    // tiny “settle” at the end (subtle damping-like feel)
-    if (a.t > 0.92) {
-      controls.target.lerp(a.toTarget, 0.12);
-      camera.position.lerp(a.toCam, 0.12);
+    // camera: first 80% goes to overshoot, last 20% settles to final
+    if (a.t < 0.82) {
+      const e1 = easeInOutCubic(a.t / 0.82);
+      camera.position.copy(a.fromCam).lerp(a.toCamOvershoot, e1);
+    } else {
+      const e2 = easeInOutCubic((a.t - 0.82) / 0.18);
+      camera.position.copy(a.toCamOvershoot).lerp(a.toCam, e2);
     }
 
     controls.update();
 
-    if (a.t >= 1) {
-      a.active = false;
-    }
+    if (a.t >= 1) a.active = false;
   });
 
   return null;
