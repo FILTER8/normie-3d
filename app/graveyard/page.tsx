@@ -74,7 +74,7 @@ export default function GraveyardPage() {
       THE GRAVEYARD
              </div>
         <div className="text-[10px] tracking-widest text-[#d0d0d0]">
-          BURNED: {burns.length.toLocaleString()}
+          STONES: {burns.length.toLocaleString()}
           {err ? <span className="ml-3 opacity-70">({err})</span> : null}
         </div>
 
