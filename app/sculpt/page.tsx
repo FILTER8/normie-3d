@@ -1,10 +1,8 @@
 /* ===========================
    app/page.tsx
-   v1.6 — Scroll isolation + Desktop foldable menu + Preset labels
-   + ROT button cycles: OFF → SMOOTH → MIDDLE → FAST → OFF
-   + Smaller loading text
-   + Smooth RESET: pixels gather (starfield→0, z→0, extrude→1) + camera turns to front
-   + NEW: MIC audio reactive starfield (MIC OFF/ON)
+   v1.9 — Pixel source switch (CANVAS ↔ ORIGINAL)
+   + Switch uses /api/normie/:id/pixels?mode=original
+   + Persists in localStorage
    =========================== */
 "use client";
 
@@ -13,10 +11,12 @@ import { fetchPixels, fetchTraits } from "../lib/normiesApi";
 import { NormieScene, type SceneHandle } from "../components/NormieScene";
 import type { MaterialMode } from "../components/NormieVoxels";
 
-const APP_VERSION = "v1.8";
+const APP_VERSION = "v1.9";
 
 type Trait = { trait_type: string; value: string | number | boolean | null };
 type TraitsResponse = { attributes?: Trait[] };
+
+type PixelMode = "canvas" | "original";
 
 function clampId(n: number) {
   if (Number.isNaN(n)) return 0;
@@ -97,11 +97,7 @@ function PixelSlider({
 }
 
 // Mobile-friendly export: defer heavy work so UI updates first
-async function downloadWithStamp(
-  dataUrl: string,
-  filename: string,
-  stamp: string
-) {
+async function downloadWithStamp(dataUrl: string, filename: string, stamp: string) {
   await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
 
   const img = new Image();
@@ -225,9 +221,7 @@ export default function Page() {
   const Z_MIN = -2.5;
   const Z_MAX = 2.5;
 
-  const [z, setZ] = useState<number[]>(() =>
-    Array.from({ length: 8 }, () => 0)
-  );
+  const [z, setZ] = useState<number[]>(() => Array.from({ length: 8 }, () => 0));
   const [extrude, setExtrude] = useState<number[]>(() =>
     Array.from({ length: 8 }, () => 1)
   );
@@ -249,6 +243,27 @@ export default function Page() {
 
   const lightName = LIGHT_NAMES[lightPreset % 5];
   const matName = MAT_NAMES[(materialMode % 5) as 0 | 1 | 2 | 3 | 4];
+
+  // ✅ Pixel source switch (CANVAS ↔ ORIGINAL)
+  const [pixelMode, setPixelMode] = useState<PixelMode>("canvas");
+  const pixelModeLabel = pixelMode === "canvas" ? "CANVAS" : "ORIGINAL";
+
+  useEffect(() => {
+    try {
+      const saved = window.localStorage.getItem("pixelMode");
+      if (saved === "canvas" || saved === "original") setPixelMode(saved);
+    } catch {}
+  }, []);
+
+  const togglePixelMode = () => {
+    setPixelMode((m) => {
+      const next: PixelMode = m === "canvas" ? "original" : "canvas";
+      try {
+        window.localStorage.setItem("pixelMode", next);
+      } catch {}
+      return next;
+    });
+  };
 
   // 🎤 mic-driven starfield
   const [micOn, setMicOn] = useState(false);
@@ -359,14 +374,17 @@ export default function Page() {
     setIdInput(String(Math.floor(Math.random() * 10000)));
   }, []);
 
-  // ---- Data loading
+  // ---- Data loading (pixels depends on pixelMode)
   useEffect(() => {
     let cancelled = false;
     setStatus({ loading: true, error: "" });
 
     const t = window.setTimeout(async () => {
       try {
-        const [p, tr] = await Promise.all([fetchPixels(id), fetchTraits(id)]);
+        const [p, tr] = await Promise.all([
+          fetchPixels(id, pixelMode),
+          fetchTraits(id),
+        ]);
         if (cancelled) return;
         setPixels(p);
         setTraits(tr);
@@ -382,7 +400,7 @@ export default function Page() {
       cancelled = true;
       window.clearTimeout(t);
     };
-  }, [id]);
+  }, [id, pixelMode]);
 
   const setZAt = (idx: number, value: number) => {
     setZ((prev) => {
@@ -458,8 +476,7 @@ export default function Page() {
   };
 
   const cycleLight = () => setLightPreset((p) => cycle(p, 5));
-  const cycleMaterial = () =>
-    setMaterialMode((m) => (cycle(m, 5) as MaterialMode));
+  const cycleMaterial = () => setMaterialMode((m) => (cycle(m, 5) as MaterialMode));
 
   const chaos = () => {
     const rZ = () => Math.random() * (Z_MAX - Z_MIN) + Z_MIN;
@@ -563,6 +580,7 @@ export default function Page() {
     starfield,
     z,
     extrude,
+    pixelMode,
   ]);
 
   // ---- Swipe left/right + double tap randomize
@@ -720,6 +738,17 @@ export default function Page() {
           MAT: {matName}
         </button>
       </div>
+
+      {/* ✅ Pixel source switch */}
+      <button
+        onClick={togglePixelMode}
+        className="mt-3 w-full border border-black/20 px-3 py-2 text-[10px] hover:bg-black/5"
+        style={{ touchAction: "manipulation" }}
+        title="Switch pixel source"
+      >
+        PIXELS: {pixelModeLabel}
+        {pixelMode === "canvas" ? " ()" : " ()"}
+      </button>
 
       <label className="mt-4 block text-[10px] opacity-80">
         TOKEN ID (0–9999)
@@ -966,10 +995,7 @@ export default function Page() {
           {sidebarOpen ? SidebarInner : null}
         </aside>
 
-        <main
-          className="relative flex-1 min-w-0 bg-[#e3e5e4]"
-          ref={sceneContainerRef}
-        >
+        <main className="relative flex-1 min-w-0 bg-[#e3e5e4]" ref={sceneContainerRef}>
           <NormieScene
             ref={sceneRef}
             pixels={pixels}
@@ -1035,6 +1061,18 @@ export default function Page() {
           </button>
         </div>
 
+        {/* Mobile quick toggle */}
+        <div className="absolute left-3 bottom-3 z-10">
+          <button
+            onClick={togglePixelMode}
+            className="border border-black/20 bg-[#e3e5e4]/80 px-3 py-2 text-[10px] text-[#48494b]"
+            style={{ touchAction: "manipulation" }}
+            title="Switch pixel source"
+          >
+            PIXELS: {pixelModeLabel}
+          </button>
+        </div>
+
         <NormieScene
           ref={sceneRef}
           pixels={pixels}
@@ -1070,9 +1108,7 @@ export default function Page() {
               </button>
             </div>
 
-            <div className="flex-1 overflow-y-auto overscroll-contain">
-              {SidebarInner}
-            </div>
+            <div className="flex-1 overflow-y-auto overscroll-contain">{SidebarInner}</div>
           </div>
         </div>
       ) : null}
