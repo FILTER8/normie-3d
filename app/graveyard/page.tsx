@@ -1,12 +1,17 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { GraveyardScene, type Burn } from "../components/graveyard/GraveyardScene";
 
 export default function GraveyardPage() {
   const [burns, setBurns] = useState<Burn[]>([]);
   const [err, setErr] = useState("");
   const [audioOn, setAudioOn] = useState(false);
+
+  const tokenFromUrl = useMemo(() => {
+    if (typeof window === "undefined") return null;
+    return new URLSearchParams(window.location.search).get("token");
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -26,7 +31,7 @@ export default function GraveyardPage() {
         if (cancelled) return;
 
         const list: Burn[] = (j.burns ?? []).map((b) => ({
-          tokenId: String(b.tokenId),
+          tokenId: String(b.tokenId ?? ""),
           blockNumber: Number(b.blockNumber ?? 0),
           txHash: String(b.txHash ?? ""),
         }));
@@ -51,7 +56,7 @@ export default function GraveyardPage() {
           {err ? <span className="ml-3 opacity-70">({err})</span> : null}
         </div>
 
-        <div className="mt-2 text-[10px] leading-4 text-[#bdbdbd]/80 tracking-wide">
+        <div className="mt-2 text-[10px] tracking-wide leading-4 text-[#bdbdbd]/80">
           THE NORMIES GRAVEYARD
         </div>
 
@@ -63,7 +68,11 @@ export default function GraveyardPage() {
         </button>
       </div>
 
-      <GraveyardScene burns={burns} audioEnabled={audioOn} />
+      <GraveyardScene
+        burns={burns}
+        audioEnabled={audioOn}
+        tokenFromUrl={tokenFromUrl}
+      />
     </div>
   );
 }

@@ -3,7 +3,7 @@
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import { Text, Billboard } from "@react-three/drei";
 import { useEffect, useMemo, useRef, useState, useCallback } from "react";
-import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import * as THREE from "three";
 import type { OrbitControls as OrbitControlsImpl } from "three-stdlib";
 
@@ -157,7 +157,7 @@ function HoverTokenLabel({
         fontSize={0.16}
         anchorX="center"
         anchorY="middle"
-        color="#e3e5e4"
+        color="#ffffff"
       >
         #{burn.tokenId}
         <meshBasicMaterial
@@ -175,9 +175,11 @@ function HoverTokenLabel({
 export function GraveyardScene({
   burns,
   audioEnabled,
+  tokenFromUrl,
 }: {
   burns: Burn[];
   audioEnabled: boolean;
+  tokenFromUrl: string | null;
 }) {
   const [opened, setOpened] = useState<
     Record<string, { burn: Burn; pos: [number, number, number] }>
@@ -198,8 +200,6 @@ export function GraveyardScene({
 
   const router = useRouter();
   const pathname = usePathname();
-  const searchParams = useSearchParams();
-  const tokenFromUrl = searchParams.get("token");
 
   const audio: GraveAudio = useMemo(() => createGraveAudio(), []);
 
@@ -287,11 +287,11 @@ export function GraveyardScene({
 
   const updateUrlToken = useCallback(
     (tokenId: string) => {
-      const params = new URLSearchParams(searchParams.toString());
-      params.set("token", tokenId);
-      router.replace(`${pathname}?${params.toString()}`, { scroll: false });
+      router.replace(`${pathname}?token=${encodeURIComponent(tokenId)}`, {
+        scroll: false,
+      });
     },
-    [pathname, router, searchParams]
+    [pathname, router]
   );
 
   const onSelect = useCallback(
