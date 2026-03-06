@@ -13,36 +13,59 @@ function hash01(n: number) {
   return (x >>> 0) / 4294967296;
 }
 
-function torusPosition(i: number) {
-  const u = hash01(i * 1013 + 17);
-  const v = hash01(i * 2027 + 29);
-  const w = hash01(i * 3011 + 41);
+function tokenSeed(tokenId: string) {
+  const n = Number(tokenId);
+  if (Number.isFinite(n)) return Math.floor(n);
+
+  let h = 2166136261;
+  for (let i = 0; i < tokenId.length; i++) {
+    h ^= tokenId.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return h >>> 0;
+}
+
+export function gravePositionFromTokenId(tokenId: string) {
+  const seed = tokenSeed(tokenId);
+
+  const u = hash01(seed * 1013 + 17);
+  const v = hash01(seed * 2027 + 29);
+  const w = hash01(seed * 3011 + 41);
 
   const theta = u * Math.PI * 2;
-  const baseR = 18 + Math.floor(i / 40) * 2.2;
+
+  const ring = Math.floor(hash01(seed * 4001 + 53) * 24);
+  const baseR = 18 + ring * 2.2;
   const rJitter = (v - 0.5) * 10;
   const R = THREE.MathUtils.clamp(baseR + rJitter, 14, 70);
 
   const phi = w * Math.PI * 2;
-  const minor = 2.5 + hash01(i * 991 + 7) * 7.5;
+  const minor = 2.5 + hash01(seed * 991 + 7) * 7.5;
 
   const x = Math.cos(theta) * (R + Math.cos(phi) * minor);
   const z = Math.sin(theta) * (R + Math.cos(phi) * minor);
   const y = Math.sin(phi) * minor * 0.75;
 
-  return { x, y, z };
+  return new THREE.Vector3(x, y, z);
 }
+
+type HoverPayload = {
+  burn: Burn;
+  worldPos: THREE.Vector3;
+} | null;
 
 export function GraveyardField({
   burns,
   hiddenTokenIds,
   onSelect,
   onHoverChange,
+  onHoverBurnChange,
 }: {
   burns: Burn[];
   hiddenTokenIds: Set<string>;
   onSelect: (burn: Burn, worldPos: THREE.Vector3) => void;
   onHoverChange?: (hovering: boolean) => void;
+  onHoverBurnChange?: (payload: HoverPayload) => void;
 }) {
   const meshRef = useRef<THREE.InstancedMesh | null>(null);
 
@@ -68,27 +91,35 @@ export function GraveyardField({
     const scales: number[] = [];
     const ph: number[] = [];
 
-    if (burns.length === 0) return { matrices: mats, baseScales: scales, phases: ph };
+    if (burns.length === 0) {
+      return { matrices: mats, baseScales: scales, phases: ph };
+    }
 
-    const minB = Math.min(...burns.map((b) => b.blockNumber));
-    const maxB = Math.max(...burns.map((b) => b.blockNumber));
+    const blockNumbers = burns
+      .map((b) => b.blockNumber)
+      .filter((n): n is number => Number.isFinite(n));
+
+    const minB = blockNumbers.length ? Math.min(...blockNumbers) : 0;
+    const maxB = blockNumbers.length ? Math.max(...blockNumbers) : 1;
     const span = Math.max(1, maxB - minB);
 
     for (let i = 0; i < burns.length; i++) {
       const burn = burns[i];
-      const p = torusPosition(i);
+      const p = gravePositionFromTokenId(burn.tokenId);
+      const seed = tokenSeed(burn.tokenId);
 
-      const age01 = (burn.blockNumber - minB) / span;
+      const blockNumber = Number.isFinite(burn.blockNumber) ? burn.blockNumber : minB;
+      const age01 = (blockNumber - minB) / span;
       const base = THREE.MathUtils.lerp(0.16, 0.42, age01);
-      const jitter = hash01(i * 97 + 3) * 0.06;
+      const jitter = hash01(seed * 97 + 3) * 0.06;
       const s = base + jitter;
 
       scales.push(s);
-      ph.push(hash01(i * 777 + 11) * Math.PI * 2);
+      ph.push(hash01(seed * 777 + 11) * Math.PI * 2);
 
-      const ry = hash01(i * 31 + 5) * Math.PI * 2;
+      const ry = hash01(seed * 31 + 5) * Math.PI * 2;
 
-      dummy.position.set(p.x, p.y, p.z);
+      dummy.position.copy(p);
       dummy.rotation.set(0, ry, 0);
       dummy.scale.setScalar(s);
       dummy.updateMatrix();
@@ -99,12 +130,10 @@ export function GraveyardField({
     return { matrices: mats, baseScales: scales, phases: ph };
   }, [burns, dummy]);
 
-  // ✅ Write ALL matrices whenever burns/hidden changes
   useEffect(() => {
     const mesh = meshRef.current;
     if (!mesh) return;
 
-    // Keep three's internal count in sync (important for raycasting & rendering)
     mesh.count = matrices.length;
 
     for (let i = 0; i < matrices.length; i++) {
@@ -127,10 +156,10 @@ export function GraveyardField({
     mesh.instanceMatrix.needsUpdate = true;
   }, [matrices, burns, hiddenTokenIds, dummy, tmpMat, tmpPos, tmpQuat, tmpScale]);
 
-  // ✅ Twinkle visible subset (optional)
   useFrame(({ clock }) => {
     const mesh = meshRef.current;
     if (!mesh) return;
+
     const n = matrices.length;
     if (n === 0) return;
 
@@ -140,8 +169,8 @@ export function GraveyardField({
 
     for (let k = 0; k < updates; k++) {
       const i = (start + k) % n;
-
       const burn = burns[i];
+
       if (!burn) continue;
       if (hiddenTokenIds.has(burn.tokenId)) continue;
 
@@ -165,13 +194,50 @@ export function GraveyardField({
 
   return (
     <instancedMesh
-      // ✅ THE BIG FIX: force remount when count changes (0 -> N)
       key={count}
       ref={meshRef}
-      args={[geom, mat, Math.max(1, count)]} // never construct with 0
+      args={[geom, mat, Math.max(1, count)]}
       frustumCulled={false}
-      onPointerOver={() => onHoverChange?.(true)}
-      onPointerOut={() => onHoverChange?.(false)}
+      onPointerOver={(e) => {
+        e.stopPropagation();
+        onHoverChange?.(true);
+
+        const i = e.instanceId ?? -1;
+        if (i < 0) return;
+
+        const burn = burns[i];
+        if (!burn) return;
+        if (hiddenTokenIds.has(burn.tokenId)) return;
+
+        onHoverBurnChange?.({
+          burn,
+          worldPos: e.point.clone(),
+        });
+      }}
+      onPointerMove={(e) => {
+        e.stopPropagation();
+
+        const i = e.instanceId ?? -1;
+        if (i < 0) return;
+
+        const burn = burns[i];
+        if (!burn) return;
+        if (hiddenTokenIds.has(burn.tokenId)) return;
+
+        onHoverBurnChange?.({
+          burn,
+          worldPos: e.point.clone(),
+        });
+      }}
+      onPointerOut={(e) => {
+        e.stopPropagation();
+        onHoverChange?.(false);
+        onHoverBurnChange?.(null);
+      }}
+      onPointerMissed={() => {
+        onHoverChange?.(false);
+        onHoverBurnChange?.(null);
+      }}
       onPointerDown={(e) => {
         e.stopPropagation();
 
@@ -182,7 +248,6 @@ export function GraveyardField({
         if (!burn) return;
         if (hiddenTokenIds.has(burn.tokenId)) return;
 
-        // ✅ instantly hide this instance (per-instance “invisible”)
         const mesh = meshRef.current;
         if (mesh) {
           mesh.getMatrixAt(i, tmpMat);
@@ -197,7 +262,7 @@ export function GraveyardField({
           mesh.instanceMatrix.needsUpdate = true;
         }
 
-        // ✅ always open (world space)
+        onHoverBurnChange?.(null);
         onSelect(burn, e.point.clone());
       }}
     />

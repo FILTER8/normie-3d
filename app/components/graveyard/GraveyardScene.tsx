@@ -1,17 +1,24 @@
 "use client";
 
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
+import { Text, Billboard } from "@react-three/drei";
 import { useEffect, useMemo, useRef, useState, useCallback } from "react";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import * as THREE from "three";
 import type { OrbitControls as OrbitControlsImpl } from "three-stdlib";
 
-import { GraveyardField } from "./GraveyardField";
+import { GraveyardField, gravePositionFromTokenId } from "./GraveyardField";
 import { DeadNormieAssemble } from "./DeadNormieAssemble";
 import { ShipControls } from "./ShipControls";
 import { createGraveAudio } from "./audio";
 import type { GraveAudio } from "./audio";
 
 export type Burn = { tokenId: string; blockNumber: number; txHash: string };
+
+type HoverLabelData = {
+  burn: Burn;
+  pos: THREE.Vector3;
+};
 
 function CameraFocus({
   controlsRef,
@@ -105,6 +112,66 @@ function CameraFocus({
   return null;
 }
 
+function HoverTokenLabel({
+  burn,
+  position,
+  visible,
+}: {
+  burn: Burn | null;
+  position: THREE.Vector3 | null;
+  visible: boolean;
+}) {
+  const materialRef = useRef<THREE.MeshBasicMaterial | null>(null);
+  const groupRef = useRef<THREE.Group | null>(null);
+  const opacityRef = useRef(0);
+
+  useFrame((state, delta) => {
+    const targetOpacity = visible ? 1 : 0;
+
+    opacityRef.current = THREE.MathUtils.lerp(
+      opacityRef.current,
+      targetOpacity,
+      1 - Math.exp(-7 * delta)
+    );
+
+    if (materialRef.current) {
+      materialRef.current.opacity = opacityRef.current;
+    }
+
+    if (groupRef.current && position) {
+      const floatY = Math.sin(state.clock.elapsedTime * 2.4) * 0.03;
+      groupRef.current.position.set(
+        position.x,
+        position.y + 0.5 + floatY,
+        position.z
+      );
+    }
+  });
+
+  if (!burn || !position) return null;
+
+  return (
+    <Billboard ref={groupRef}>
+      <Text
+        font="/fonts/press-start-2p.ttf"
+        fontSize={0.16}
+        anchorX="center"
+        anchorY="middle"
+        color="#e3e5e4"
+      >
+        #{burn.tokenId}
+        <meshBasicMaterial
+          ref={materialRef}
+          transparent
+          opacity={0}
+          toneMapped={false}
+          depthWrite={false}
+        />
+      </Text>
+    </Billboard>
+  );
+}
+
 export function GraveyardScene({
   burns,
   audioEnabled,
@@ -116,8 +183,10 @@ export function GraveyardScene({
     Record<string, { burn: Burn; pos: [number, number, number] }>
   >({});
 
-  const openedCount = Object.keys(opened).length;
-  const hiddenTokenIds = useMemo(() => new Set(Object.keys(opened)), [opened]);
+  const [hovered, setHovered] = useState<HoverLabelData | null>(null);
+  const [hoverLabel, setHoverLabel] = useState<HoverLabelData | null>(null);
+
+  const hoverClearTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const bg = "#1c1c1e";
   const fog = useMemo(() => new THREE.Fog(bg, 10, 220), [bg]);
@@ -125,29 +194,71 @@ export function GraveyardScene({
   const controlsRef = useRef<OrbitControlsImpl | null>(null);
   const focusTargetRef = useRef<THREE.Vector3 | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const focusedDeepLinkTokenRef = useRef<string | null>(null);
 
-  // ✅ NO REF READS DURING RENDER:
-  // Create exactly one engine instance for the lifetime of this component.
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const tokenFromUrl = searchParams.get("token");
+
   const audio: GraveAudio = useMemo(() => createGraveAudio(), []);
 
-  // ✅ keep audio enabled/disabled in sync with UI toggle
+  const deepLinkedEntry = useMemo(() => {
+    if (!tokenFromUrl) return null;
+
+    const burn = burns.find((b) => b.tokenId === tokenFromUrl);
+    if (!burn) return null;
+
+    const pos = gravePositionFromTokenId(burn.tokenId);
+
+    return {
+      burn,
+      pos: [pos.x, pos.y, pos.z] as [number, number, number],
+      focusPos: pos,
+    };
+  }, [tokenFromUrl, burns]);
+
+  const combinedOpened = useMemo(() => {
+    if (!deepLinkedEntry) return opened;
+    if (opened[deepLinkedEntry.burn.tokenId]) return opened;
+
+    return {
+      ...opened,
+      [deepLinkedEntry.burn.tokenId]: {
+        burn: deepLinkedEntry.burn,
+        pos: deepLinkedEntry.pos,
+      },
+    };
+  }, [opened, deepLinkedEntry]);
+
+  const openedCount = Object.keys(combinedOpened).length;
+  const hiddenTokenIds = useMemo(
+    () => new Set(Object.keys(combinedOpened)),
+    [combinedOpened]
+  );
+
   useEffect(() => {
     audio.setEnabled(audioEnabled);
   }, [audio, audioEnabled]);
 
-  // ✅ react to opened count
   useEffect(() => {
     audio.setIntensity(openedCount);
   }, [audio, openedCount]);
 
-  // ✅ clean up exactly once
   useEffect(() => {
     return () => {
       audio.dispose();
     };
   }, [audio]);
 
-  // cursor + safe place to resume audio on first gesture if audio is enabled
+  useEffect(() => {
+    return () => {
+      if (hoverClearTimeoutRef.current) {
+        clearTimeout(hoverClearTimeoutRef.current);
+      }
+    };
+  }, []);
+
   useEffect(() => {
     const el = canvasRef.current;
     if (!el) return;
@@ -159,6 +270,7 @@ export function GraveyardScene({
       el.style.cursor = "grabbing";
       if (audioEnabled) audio.ensureStarted();
     };
+
     const onUp = () => {
       el.style.cursor = "grab";
     };
@@ -173,7 +285,15 @@ export function GraveyardScene({
     };
   }, [audio, audioEnabled]);
 
-  // ✅ keep your selection behavior intact
+  const updateUrlToken = useCallback(
+    (tokenId: string) => {
+      const params = new URLSearchParams(searchParams.toString());
+      params.set("token", tokenId);
+      router.replace(`${pathname}?${params.toString()}`, { scroll: false });
+    },
+    [pathname, router, searchParams]
+  );
+
   const onSelect = useCallback(
     (burn: Burn, worldPos: THREE.Vector3) => {
       if (audioEnabled) {
@@ -193,14 +313,48 @@ export function GraveyardScene({
           },
         };
       });
+
+      updateUrlToken(burn.tokenId);
     },
-    [audio, audioEnabled]
+    [audio, audioEnabled, updateUrlToken]
   );
+
+  const handleHoverBurnChange = useCallback((payload: HoverLabelData | null) => {
+    if (hoverClearTimeoutRef.current) {
+      clearTimeout(hoverClearTimeoutRef.current);
+      hoverClearTimeoutRef.current = null;
+    }
+
+    if (!payload) {
+      setHovered(null);
+      hoverClearTimeoutRef.current = setTimeout(() => {
+        setHoverLabel(null);
+        hoverClearTimeoutRef.current = null;
+      }, 180);
+      return;
+    }
+
+    const nextPayload = {
+      burn: payload.burn,
+      pos: payload.pos.clone(),
+    };
+
+    setHovered(nextPayload);
+    setHoverLabel(nextPayload);
+  }, []);
+
+  useEffect(() => {
+    if (!deepLinkedEntry) return;
+    if (focusedDeepLinkTokenRef.current === deepLinkedEntry.burn.tokenId) return;
+
+    focusedDeepLinkTokenRef.current = deepLinkedEntry.burn.tokenId;
+    focusTargetRef.current = deepLinkedEntry.focusPos.clone();
+  }, [deepLinkedEntry]);
 
   return (
     <Canvas
       camera={{ position: [0, 1.2, 10], fov: 58, near: 0.1, far: 1200 }}
-      gl={{ antialias: true }}
+      gl={{ antialias: true, alpha: false }}
       dpr={[1, 2]}
       onCreated={({ gl }) => {
         canvasRef.current = gl.domElement;
@@ -220,10 +374,32 @@ export function GraveyardScene({
         burns={burns}
         hiddenTokenIds={hiddenTokenIds}
         onSelect={onSelect}
+        onHoverChange={() => {}}
+        onHoverBurnChange={(payload) => {
+          if (!payload) {
+            handleHoverBurnChange(null);
+            return;
+          }
+
+          handleHoverBurnChange({
+            burn: payload.burn,
+            pos: payload.worldPos.clone(),
+          });
+        }}
       />
 
-      {Object.values(opened).map(({ burn, pos }) => (
-        <DeadNormieAssemble key={burn.tokenId} tokenId={burn.tokenId} position={pos} />
+      <HoverTokenLabel
+        burn={hoverLabel?.burn ?? null}
+        position={hoverLabel?.pos ?? null}
+        visible={Boolean(hovered)}
+      />
+
+      {Object.values(combinedOpened).map(({ burn, pos }) => (
+        <DeadNormieAssemble
+          key={burn.tokenId}
+          tokenId={burn.tokenId}
+          position={pos}
+        />
       ))}
     </Canvas>
   );
