@@ -1,111 +1,107 @@
 import { NextResponse } from "next/server";
 
-const ALCHEMY_KEY = process.env.ALCHEMY_KEY ?? "";
-const ALCHEMY_URL = `https://eth-mainnet.g.alchemy.com/v2/${ALCHEMY_KEY}`;
+const NORMIES_API = "https://api.normies.art";
 
-const NORMIES = "0x9Eb6E2025B64f340691e424b7fe7022fFDE12438";
-const ZERO = "0x0000000000000000000000000000000000000000";
-
-type Transfer = {
-  hash?: string;
-  blockNum?: string; // hex string like "0x..."
-  erc721TokenId?: string;
+type BurnedTokenApiItem = {
+  tokenId: string;
+  commitId?: string;
+  owner?: string;
+  receiverTokenId?: string;
+  pixelCount?: number | string;
+  blockNumber?: string;
+  timestamp?: string;
+  txHash?: string;
 };
 
-type AssetTransfersResult = {
-  transfers: Transfer[];
-  pageKey?: string;
+type Burn = {
+  tokenId: string;
+  txHash?: string;
+  blockNumber?: number;
+  timestamp?: number;
+  commitId?: string;
+  owner?: string;
+  receiverTokenId?: string;
+  pixelCount?: number;
 };
 
-type JsonRpcSuccess<T> = {
-  jsonrpc: "2.0";
-  id: number;
-  result: T;
-};
-
-type JsonRpcError = {
-  jsonrpc: "2.0";
-  id: number;
-  error: { code: number; message: string; data?: unknown };
-};
-
-type JsonRpcResponse<T> = JsonRpcSuccess<T> | JsonRpcError;
-
-async function alchemyRpc<T>(method: string, params: unknown[]): Promise<T> {
-  const r = await fetch(ALCHEMY_URL, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
-    next: { revalidate: 300 }, // refresh every 5 min
+async function fetchJson<T>(url: string): Promise<T> {
+  const r = await fetch(url, {
+    headers: { accept: "application/json" },
+    next: { revalidate: 300 },
   });
 
   const text = await r.text();
-  if (!r.ok) throw new Error(`Alchemy HTTP ${r.status}: ${text.slice(0, 200)}`);
 
-  let json: JsonRpcResponse<T>;
+  if (!r.ok) {
+    throw new Error(`HTTP ${r.status} for ${url}: ${text.slice(0, 300)}`);
+  }
+
   try {
-    json = JSON.parse(text) as JsonRpcResponse<T>;
+    return JSON.parse(text) as T;
   } catch {
-    throw new Error(`Alchemy returned non-JSON: ${text.slice(0, 200)}`);
+    throw new Error(`Non-JSON from ${url}: ${text.slice(0, 300)}`);
   }
+}
 
-  if ("error" in json) {
-    throw new Error(`Alchemy RPC error: ${JSON.stringify(json.error)}`);
-  }
-
-  return json.result;
+function toNum(v?: string | number): number | undefined {
+  if (v === undefined || v === null) return undefined;
+  const n = typeof v === "number" ? v : Number(v);
+  return Number.isFinite(n) ? n : undefined;
 }
 
 export async function GET() {
-  if (!ALCHEMY_KEY) {
-    return NextResponse.json({ error: "Missing ALCHEMY_KEY" }, { status: 500 });
-  }
+  try {
+    const limit = 100; // docs say max 100 per page
+    let offset = 0;
 
-  const burned: { tokenId: string; txHash?: string; blockNumber?: number }[] =
-    [];
+    const burns: Burn[] = [];
+    const seen = new Set<string>();
 
-  let pageKey: string | undefined = undefined;
+    for (let safety = 0; safety < 200; safety++) {
+      const url = `${NORMIES_API}/history/burned-tokens?limit=${limit}&offset=${offset}`;
+      const page = await fetchJson<BurnedTokenApiItem[]>(url);
 
-  // Fetch burns with pagination
-  for (let safety = 0; safety < 50; safety++) {
-    // ✅ Explicitly typed response fixes TS7022
-    const res: AssetTransfersResult = await alchemyRpc<AssetTransfersResult>(
-      "alchemy_getAssetTransfers",
-      [
-        {
-          fromBlock: "0x0",
-          toBlock: "latest",
-          contractAddresses: [NORMIES],
-          category: ["erc721"],
-          toAddress: ZERO, // 🔥 burns
-          withMetadata: false,
-          excludeZeroValue: false,
-          maxCount: "0x3e8", // 1000 per page
-          pageKey,
-        },
-      ]
-    );
+      if (!Array.isArray(page) || page.length === 0) break;
 
-    for (const t of res.transfers ?? []) {
-      const tokenId = t.erc721TokenId
-        ? BigInt(t.erc721TokenId).toString()
-        : undefined;
+      for (const item of page) {
+        if (!item?.tokenId) continue;
+        if (seen.has(item.tokenId)) continue;
+        seen.add(item.tokenId);
 
-      if (!tokenId) continue;
+        burns.push({
+          tokenId: item.tokenId,
+          txHash: item.txHash,
+          blockNumber: toNum(item.blockNumber),
+          timestamp: toNum(item.timestamp),
+          commitId: item.commitId,
+          owner: item.owner,
+          receiverTokenId: item.receiverTokenId,
+          pixelCount: toNum(item.pixelCount),
+        });
+      }
 
-      burned.push({
-        tokenId,
-        txHash: t.hash,
-        blockNumber: t.blockNum ? parseInt(t.blockNum, 16) : undefined,
-      });
+      if (page.length < limit) break;
+      offset += limit;
     }
 
-    if (!res.pageKey) break;
-    pageKey = res.pageKey;
+    burns.sort((a, b) => {
+      const byBlock = (b.blockNumber ?? 0) - (a.blockNumber ?? 0);
+      if (byBlock !== 0) return byBlock;
+      return (b.timestamp ?? 0) - (a.timestamp ?? 0);
+    });
+
+    return NextResponse.json({
+      count: burns.length,
+      burns,
+    });
+  } catch (error) {
+    console.error("Failed to fetch burn history:", error);
+
+    return NextResponse.json(
+      {
+        error: error instanceof Error ? error.message : "Unknown error",
+      },
+      { status: 500 }
+    );
   }
-
-  // newest first (if blockNumber present)
-  burned.sort((a, b) => (b.blockNumber ?? 0) - (a.blockNumber ?? 0));
-
-  return NextResponse.json({ count: burned.length, burns: burned });
 }
